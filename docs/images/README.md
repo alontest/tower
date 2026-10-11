@@ -1,6 +1,6 @@
 # README 图片
 
-- `icon.png`：App 图标的 Mac 版本（`AppIcon-mac-128@2x.png`），自带 Mac 图标的边距和圆角。
+- `icon.png`：用 Icon Composer 的 `ictool` 从 `Tower/AppIcon.icon` 渲染的图标（带 Liquid Glass 效果），再加上 Mac 风格的边距、圆角和阴影，256 像素。
 - `clients/*.png`：README 里的客户端图标，取自 `Tower/Assets.xcassets/Client*.imageset/`，缩放到 120 像素并按 iOS 图标圆角裁切；权利归各客户端所有，见 [第三方声明](../../THIRD-PARTY-NOTICES.md#客户端-app-图标)。
 - `iphone-1.jpg` 至 `iphone-5.jpg`、`mac-3.jpg`：App Store 宣传图的压缩版，2026-10-11 制作。
 

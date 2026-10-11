@@ -1,0 +1,90 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "solid" : "srgb:0.07843,0.08627,0.10980,1.00000"
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "name" : "Beacon",
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "beacon.svg",
+          "name" : "beacon"
+        },
+        {
+          "glass" : true,
+          "image-name" : "antenna.svg",
+          "name" : "antenna"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    },
+    {
+      "name" : "Cab",
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "mullions.svg",
+          "name" : "mullions",
+          "opacity" : 0.85
+        },
+        {
+          "glass" : true,
+          "image-name" : "roof.svg",
+          "name" : "roof"
+        },
+        {
+          "glass" : true,
+          "image-name" : "bowl.svg",
+          "name" : "bowl"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.45
+      }
+    },
+    {
+      "name" : "Shaft",
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "shaft.svg",
+          "name" : "shaft"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
