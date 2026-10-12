@@ -3,6 +3,8 @@
 
 公证的 `xcodebuild -exportArchive` 返回上传成功后，还须在正式发布机使用同一归档执行 `xcodebuild -exportNotarizedApp -archivePath <归档路径> -exportPath <公证版导出目录>`。仅有公证提交成功不代表该目录已包含应用；取回后再验证 `stapler validate`、严格签名与 Gatekeeper，通过后制作 DMG。
 
+Mac 分发启动验收必须使用公开回下载的包，保留正常下载隔离标记，安装后从 Finder 打开并确认主界面可交互；退出后再次打开复核。`spctl` / `stapler` / 严格签名通过以及可执行进程短暂存在，都不能代替这一步。遇到拦截时保存系统日志并核对实际安装实例，不要删除隔离标记或关闭 Gatekeeper 来取得通过结果。
+
 ## Mac Homebrew 分发
 
 独立 tap 仓库为 https://github.com/pengchujin/homebrew-tap ，安装命令为 `brew install --cask pengchujin/tap/tower`。

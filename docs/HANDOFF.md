@@ -10,7 +10,8 @@
 - 发布源码 `c5a5292` 已推送；正式 Xcode 两端 Release 归档、导出与签名校验通过，Mac 包含 arm64 / x86_64。asc 上传两端后 Apple 处理完成；先通过严格 Beta 预检并提交外部群组，状态均为 WAITING_FOR_REVIEW。
 - 随后提交两端正式审核，回读均为 WAITING_FOR_REVIEW。asc 完整预检因线上与撤回的 App Info 同时存在而无法自动选择年龄分级；分别读取两份年龄分级确认一致，其他文案、审核资料、14 张截图逐项核对保持不变，构建已处理及 Beta 严格预检通过，正式提交由 Apple 接受。发布方式沿用 AFTER_APPROVAL。
 - Mac Developer ID 签名、公证、票据取回、Hardened Runtime、严格签名、Gatekeeper、双架构与 DMG 挂载检查通过。GitHub [v1.0.29](https://github.com/pengchujin/tower/releases/tag/v1.0.29) 已公开并设为 Latest；公开回下载 SHA-256 与本机一致：`70630a67e0ba8d786c0215919b4bea796e540f13ace6d0735e06c4bef7ccda5a`。
-- README 下载入口、Homebrew cask 已同步，tap 提交 `91eacc7`。brew style / audit 通过；首次下载出现 partial file，重试后实际升级成功，再跑 audit / upgrade 返回 0 并确认已是最新。安装后的版本、严格签名、公证和 Gatekeeper 验证通过，Mac 可执行程序启动后持续运行。
+- README 下载入口、Homebrew cask 已同步，tap 提交 `91eacc7`。brew style / audit 通过；首次下载出现 partial file，重试后实际升级成功，再跑 audit / upgrade 返回 0 并确认已是最新。安装后的版本、严格签名、公证和 Gatekeeper 命令行验证通过；最初仅根据进程短暂存在判断启动成功，后被用户的拦截截图和系统终止日志推翻。
+- 同日修复本机安装：公开 DMG 解出的带隔离标记副本能正常显示主界面，与原安装的 89 个文件内容和权限一致；原路径覆盖安装仍卡在系统校验。将同包在另一安装路径通过正常启动校验后移回 `/Applications/塔台.app`，退出并从 Finder 重新打开，主界面成功显示。原应用副本保存在私有诊断目录，用户数据保留；未删除隔离属性或关闭安全检查。现象指向本机安装校验状态，底层原因尚未确认；没有重打包或替换公开发布附件。以后必须单独验收正常图形启动，不能以签名检查或进程短暂存在代替。
 
 
 
