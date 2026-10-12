@@ -1,12 +1,17 @@
 # 当前交接
 
-## 1.0.29（68）原版图标恢复发布准备（2026-10-12）
+## 1.0.29（68）原版图标恢复、全部渠道发布与提审（2026-10-12）
 
 - 用户要求恢复原版图标后重发所有渠道，先外部 Beta、再正式审核；包含 `8bbd8dd` 的图标和应用内标志回退，功能代码不变。
 - 正式 Xcode 27.0（27A266a）；iOS / Mac 各 1,333 项 XCTest（分别跳过 6 / 36 项、零失败）及 106 项 Swift Testing 通过。iOS 收尾诊断采集停顿，终止本轮 simctl diagnose 后 xcodebuild 正常返回 0；两端 TEST SUCCEEDED。发布脚本、规则更新器 20 项测试、本地化 1,122/1,122、规则新鲜度和 77 个远程产物校验通过。
 - 实体 iPhone 已覆盖安装并成功启动 1.0.29（68）。用户恢复 Xcode 账号登录，已确认发布团队可见。
 - 开始时 iOS 1.0.28 已上架，Mac 仍在审核中；已撤回 Mac 旧审核以更换新包。新版本沿用 14 张截图、其他商店文案和审核资料，并逐项比对保留；仅调整图标相关更新日志。
 - 私有归档及回执保存在 `~/Builds/Tower-1.0.29-68/`，测试证据在忽略目录 `.artifacts/release-1.0.29-68/`。
+- 发布源码 `c5a5292` 已推送；正式 Xcode 两端 Release 归档、导出与签名校验通过，Mac 包含 arm64 / x86_64。asc 上传两端后 Apple 处理完成；先通过严格 Beta 预检并提交外部群组，状态均为 WAITING_FOR_REVIEW。
+- 随后提交两端正式审核，回读均为 WAITING_FOR_REVIEW。asc 完整预检因线上与撤回的 App Info 同时存在而无法自动选择年龄分级；分别读取两份年龄分级确认一致，其他文案、审核资料、14 张截图逐项核对保持不变，构建已处理及 Beta 严格预检通过，正式提交由 Apple 接受。发布方式沿用 AFTER_APPROVAL。
+- Mac Developer ID 签名、公证、票据取回、Hardened Runtime、严格签名、Gatekeeper、双架构与 DMG 挂载检查通过。GitHub [v1.0.29](https://github.com/pengchujin/tower/releases/tag/v1.0.29) 已公开并设为 Latest；公开回下载 SHA-256 与本机一致：`70630a67e0ba8d786c0215919b4bea796e540f13ace6d0735e06c4bef7ccda5a`。
+- README 下载入口、Homebrew cask 已同步，tap 提交 `91eacc7`。brew style / audit 通过；首次下载出现 partial file，重试后实际升级成功，再跑 audit / upgrade 返回 0 并确认已是最新。安装后的版本、严格签名、公证和 Gatekeeper 验证通过，Mac 可执行程序启动后持续运行。
+
 
 
 ## 1.0.28（67）新图标双平台提审，Mac 直接分发待完成（2026-10-12）
