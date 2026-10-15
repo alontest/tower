@@ -102,6 +102,10 @@ struct CustomRuleFlow: Identifiable, Codable, Hashable {
     /// does not already declare one. The generator still consumes an ordinary
     /// `RuleScheme`, so this remains backward-compatible with every client.
     var generatedPolicyGroup: RuleSchemeGroup?
+    /// Domain/IP conditions the user attached to an existing group from its
+    /// detail page. They match before every template rule. Missing (older
+    /// builds) means an ordinary placement inserted at its first overlap.
+    var isGroupSupplement: Bool?
 
     init(
         id: UUID = UUID(),
@@ -113,7 +117,8 @@ struct CustomRuleFlow: Identifiable, Codable, Hashable {
         localRuleSetID: UUID? = nil,
         catalogID: String? = nil,
         sourceURLString: String? = nil,
-        generatedPolicyGroup: RuleSchemeGroup? = nil
+        generatedPolicyGroup: RuleSchemeGroup? = nil,
+        isGroupSupplement: Bool? = nil
     ) {
         self.id = id
         self.schemeID = schemeID
@@ -125,6 +130,24 @@ struct CustomRuleFlow: Identifiable, Codable, Hashable {
         self.catalogID = catalogID
         self.sourceURLString = sourceURLString
         self.generatedPolicyGroup = generatedPolicyGroup
+        self.isGroupSupplement = isGroupSupplement
+    }
+
+    /// One flow per (scheme, group) holds every supplement for that group.
+    /// `groupName` is the source name, so a later rename still applies.
+    static func groupSupplement(schemeID: String, groupName: String, rules: [SupplementRule]) -> CustomRuleFlow {
+        CustomRuleFlow(
+            schemeID: schemeID,
+            name: groupName,
+            policyName: groupName,
+            rulesText: rules.map(\.line).joined(separator: "\n"),
+            isGroupSupplement: true
+        )
+    }
+
+    var supplementRules: [SupplementRule] {
+        guard isGroupSupplement == true else { return [] }
+        return rulesText.split(whereSeparator: \.isNewline).compactMap { SupplementRule(line: String($0)) }
     }
 
     /// Creates a reusable, user-owned ruleset with its own policy group.

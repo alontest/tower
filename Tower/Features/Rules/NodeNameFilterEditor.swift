@@ -89,6 +89,8 @@ struct NodeNameFilterFields: View {
     private let initialDraft: NodeNameFilterDraft
     @State private var draft: NodeNameFilterDraft
     @State private var keywords: [Keyword]
+    /// `.*` and friends shown as words: "all nodes", not an expression.
+    @State private var showsAllNodes: Bool
     @FocusState private var focusedKeyword: UUID?
     @Environment(\.layoutDirection) private var layoutDirection
 
@@ -108,6 +110,17 @@ struct NodeNameFilterFields: View {
         initialDraft = initial
         _draft = State(initialValue: initial)
         _keywords = State(initialValue: Self.tokens(initial.keywords))
+        _showsAllNodes = State(initialValue: !simplified && Self.matchesEveryNode(pattern.wrappedValue))
+    }
+
+    /// `.*`, `^.*$` or `.+`, optionally case-flagged: a filter that keeps
+    /// every node, which is what 自动选择 and 手动切换 ship with.
+    static func matchesEveryNode(_ pattern: String) -> Bool {
+        var text = pattern.trimmingCharacters(in: .whitespaces)
+        for flag in ["(?i)", "(?-i)"] where text.hasPrefix(flag) { text.removeFirst(flag.count) }
+        if text.hasPrefix("^") { text.removeFirst() }
+        if text.hasSuffix("$") { text.removeLast() }
+        return text == ".*" || text == ".+"
     }
 
     private var editableKeywords: NodeNameFilterDraft? {
@@ -123,7 +136,45 @@ struct NodeNameFilterFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if draft.usesRegex {
+            if showsAllNodes {
+                HStack {
+                    Text("匹配方式")
+                    Spacer()
+                    Text("全部节点")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("node-filter-all")
+                Text("不按名称筛选，包含所有节点。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button {
+                    showsAllNodes = false
+                    var keywordDraft = NodeNameFilterDraft(caseInsensitiveDefault: caseInsensitiveDefault)
+                    keywordDraft.usesRegex = false
+                    draft = keywordDraft
+                    let keyword = Keyword(value: "")
+                    keywords = [keyword]
+                    focusedKeyword = keyword.id
+                } label: {
+                    Text("改为按关键词筛选")
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SelectionIndicatorButtonStyle())
+                .foregroundStyle(Color.accentColor)
+                .font(.subheadline)
+                .accessibilityIdentifier("node-filter-use-keywords")
+                Divider().padding(.vertical, 6)
+                Button("切换到正则表达式") {
+                    showsAllNodes = false
+                    draft.regex = pattern
+                    draft.usesRegex = true
+                }
+                .buttonStyle(SelectionIndicatorButtonStyle())
+                .foregroundStyle(Color.accentColor)
+                .font(.subheadline)
+                .frame(minHeight: 44)
+            } else if draft.usesRegex {
                 TextEditor(text: $draft.regex)
                     .font(.system(.footnote, design: .monospaced))
                     .frame(minHeight: 100)

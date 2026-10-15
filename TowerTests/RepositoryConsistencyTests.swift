@@ -149,9 +149,8 @@ final class RepositoryConsistencyTests: XCTestCase {
         XCTAssertTrue(source.contains(".searchable("))
         XCTAssertTrue(source.contains("rule-customization"))
         XCTAssertTrue(source.contains("rule-customization-list"))
-        XCTAssertTrue(source.contains("customRuleGroupsSection"))
+        XCTAssertTrue(source.contains("ruleGroupsSection"))
         XCTAssertTrue(source.contains("规则定制"))
-        XCTAssertTrue(source.contains("当前规则"))
         XCTAssertTrue(source.contains("我的规则集"))
         XCTAssertTrue(source.contains("在线规则库"))
         XCTAssertTrue(source.contains("新建规则集"))
@@ -225,16 +224,18 @@ final class RepositoryConsistencyTests: XCTestCase {
         XCTAssertTrue(source.contains(".towerToast()"))
     }
 
-    func testCurrentRuleRowsHideTheRedundantGroupModeLabel() throws {
+    func testCurrentRuleRowsSummarizeRouteAndRuleSources() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
-        let rowStart = try XCTUnwrap(source.range(of: "private func customRuleGroupActionRow"))
+        let rowStart = try XCTUnwrap(source.range(of: "private func customRuleGroupRow"))
         let nextFunctionStart = try XCTUnwrap(
             source.range(of: "private func categoryButton", range: rowStart.upperBound..<source.endIndex)
         )
         let rowSource = String(source[rowStart.lowerBound..<nextFunctionStart.lowerBound])
 
         XCTAssertFalse(rowSource.contains("Text(groupModeTitle(group))"))
-        XCTAssertTrue(rowSource.contains("Text(groupSelectionSummary(group))"))
+        XCTAssertTrue(rowSource.contains("Text(groupRowDetail(group))"))
+        XCTAssertTrue(rowSource.contains("model.ruleSources(forGroup: group.name, in: scheme)"))
+        XCTAssertTrue(rowSource.contains("model.supplementRules(forGroup: group.name, in: scheme)"))
     }
 
     func testCustomRuleEditorUsesCompactMonospacedExamples() throws {
@@ -289,7 +290,7 @@ final class RepositoryConsistencyTests: XCTestCase {
             source.range(of: "private struct RuleCustomizationSheet: View")
         )
         let identityEditorStart = try XCTUnwrap(
-            source.range(of: "private struct RuleGroupIdentityEditor: View")
+            source.range(of: "private struct RuleSchemeNetworkSettingsEditor: View")
         )
         let sheetSource = String(source[sheetStart.lowerBound..<identityEditorStart.lowerBound])
 
@@ -373,12 +374,34 @@ final class RepositoryConsistencyTests: XCTestCase {
         XCTAssertFalse(footer.contains(".towerCard()"), footer)
     }
 
-    func testRuleGroupCustomizationUsesOneReorderableEditableList() throws {
+    /// Issue #45: one list in the order clients show the groups, the same as
+    /// the home preview and the export. Dragging also moves the dragged
+    /// group's matching priority, and says when sites change hands.
+    func testRuleGroupListUsesClientOrderAndDragMovesPriorityWithWarning() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
+        let detail = try sourceText("Tower/Features/Rules/RuleGroupDetailView.swift")
+        let ruleStart = try XCTUnwrap(source.range(of: "private var ruleGroupsSection"))
+        let rowStart = try XCTUnwrap(source.range(of: "private func groupRow"))
+        let rules = String(source[ruleStart.lowerBound..<rowStart.lowerBound])
 
-        XCTAssertTrue(source.contains("private var customRuleGroupsSection"))
-        XCTAssertTrue(source.contains("RuleGroupEditor("))
-        XCTAssertTrue(source.contains(".onMove"))
+        XCTAssertTrue(rules.contains(".onMove"))
+        XCTAssertTrue(rules.contains("MacListReorderBridge"))
+        XCTAssertTrue(rules.contains("ForEach(visible, id: \\.name)"))
+        XCTAssertFalse(rules.contains(".moveDisabled(true)"), "所有组都能拖")
+        XCTAssertTrue(source.contains("model.setRuleGroupOrder(names, for: scheme)"))
+        XCTAssertFalse(source.contains("nodeGroupsSection"), "节点组属于分流规则，不再单独成组")
+        XCTAssertFalse(source.contains("Text(\"节点分组\")"))
+        XCTAssertTrue(source.contains("model.matchingOrderAfterDragging(moved, from: previous, to: names, in: scheme)"))
+        XCTAssertTrue(source.contains("model.matchingOrderConflicts(from: previousMatching, to: newMatching, in: scheme)"))
+        XCTAssertTrue(source.contains("\"匹配结果会改变\""), "拖动改变匹配时必须提示")
+        XCTAssertTrue(source.contains("Button(\"撤销\")"))
+        XCTAssertFalse(source.contains("拖动排序只改变显示顺序，不影响分流。"))
+        XCTAssertFalse(detail.contains("RuleMatchOrderView"), "不再单独提供匹配顺序页")
+        XCTAssertTrue(detail.contains("NodeNameFilterFields("), "节点筛选直接在策略组页面里改")
+        XCTAssertFalse(source.contains("struct RuleGroupEditor"), "不再有单独的策略组编辑弹窗")
+        XCTAssertTrue(detail.contains("AddSupplementRuleSheet("))
+        XCTAssertTrue(detail.contains("RulesetContentView(ruleset: source)"))
+        XCTAssertTrue(detail.contains("if showsRuleSections(group) {"), "节点组不显示添加网站和方案规则")
         XCTAssertTrue(source.contains("另存为新方案"))
         XCTAssertFalse(source.contains("private var protectedGroupsSection"))
         XCTAssertFalse(source.contains("private var serviceGroupsSection"))
@@ -389,7 +412,7 @@ final class RepositoryConsistencyTests: XCTestCase {
     func testRestoringInitialRulesLivesInProminentToolbarMenuAndRequiresConfirmation() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
         let sheetStart = try XCTUnwrap(source.range(of: "private struct RuleCustomizationSheet: View"))
-        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleGroupIdentityEditor: View"))
+        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleSchemeNetworkSettingsEditor: View"))
         let sheetSource = String(source[sheetStart.lowerBound..<identityEditorStart.lowerBound])
         let menuStart = try XCTUnwrap(sheetSource.range(of: "ToolbarItem(placement: .cancellationAction)"))
         let confirmationStart = try XCTUnwrap(sheetSource.range(of: "ToolbarItemGroup(placement: .confirmationAction)"))
@@ -412,67 +435,47 @@ final class RepositoryConsistencyTests: XCTestCase {
         XCTAssertTrue(sheetSource.contains(".confirmationDialog(\"恢复初始规则\""))
     }
 
-    func testRuleGroupReorderingUsesALocalDraftAndCommitsAfterEditing() throws {
-        let source = try sourceText("Tower/Features/Rules/RulesView.swift")
-        let sheetStart = try XCTUnwrap(source.range(of: "private struct RuleCustomizationSheet: View"))
-        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleGroupIdentityEditor: View"))
-        let sheetSource = String(source[sheetStart.lowerBound..<identityEditorStart.lowerBound])
-        let sectionStart = try XCTUnwrap(sheetSource.range(of: "private var customRuleGroupsSection"))
-        let userFlowStart = try XCTUnwrap(sheetSource.range(of: "private func userCreatedFlow"))
-        let sectionSource = String(sheetSource[sectionStart.lowerBound..<userFlowStart.lowerBound])
-
-        XCTAssertTrue(sheetSource.contains("@State private var editingGroups: [RuleSchemeGroup] = []"))
-        XCTAssertTrue(sectionSource.contains("editingGroups.move(fromOffsets: source, toOffset: destination)"))
-        XCTAssertFalse(sectionSource.contains("model.moveRuleGroups(fromOffsets:"))
-        XCTAssertTrue(sheetSource.contains("private func commitEditingGroupOrder()"))
-        XCTAssertTrue(sheetSource.contains("model.setRuleGroupOrder(names, for: scheme)"))
-    }
-
-    func testRuleCustomizationSynchronizesMembershipWhileEditing() throws {
+    func testRuleCustomizationKeepsDragHandlesAndSearchOnOnePage() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
         let start = try XCTUnwrap(source.range(of: "private struct RuleCustomizationSheet: View"))
-        let end = try XCTUnwrap(source.range(of: "private struct RuleGroupIdentityEditor: View"))
+        let end = try XCTUnwrap(source.range(of: "private struct RuleSchemeNetworkSettingsEditor: View"))
         let sheet = String(source[start.lowerBound..<end.lowerBound])
-        XCTAssertFalse(sheet.contains("guard !ruleEditMode.isEditing else { return }"))
         XCTAssertTrue(sheet.contains(".constant(.active)"))
-        XCTAssertFalse(sheet.contains("toggleRuleEditing"))
         XCTAssertTrue(sheet.contains(".moveDisabled(!trimmedSearch.isEmpty)"))
-        XCTAssertTrue(sheet.contains("commitEditingGroupOrder()"))
+        XCTAssertTrue(sheet.contains("localRuleSetsSection\n                catalogSections"))
+        XCTAssertFalse(sheet.contains("RuleCustomizationRoute.catalog"))
     }
 
-    func testEditModeOffersRuleEmojiAndNameEditing() throws {
+    /// One place to edit a group: name, type and candidates sit on its
+    /// page and save in place, with drag handles always visible.
+    func testGroupDetailEditsInPlace() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
-        let sheetStart = try XCTUnwrap(source.range(of: "private struct RuleCustomizationSheet: View"))
-        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleGroupIdentityEditor: View"))
-        let sheetSource = String(source[sheetStart.lowerBound..<identityEditorStart.lowerBound])
-        let listStart = try XCTUnwrap(sheetSource.range(of: "List {"))
-        let navigationTitle = try XCTUnwrap(sheetSource.range(of: ".navigationTitle("))
-        let listConfiguration = String(sheetSource[listStart.lowerBound..<navigationTitle.lowerBound])
+        let detail = try sourceText("Tower/Features/Rules/RuleGroupDetailView.swift")
 
-        XCTAssertTrue(listConfiguration.contains(".environment(\\.editMode, .constant(.active))"))
-        XCTAssertFalse(sheetSource.contains("@Environment(\\.editMode) private var editMode"))
-        XCTAssertFalse(sheetSource.contains("EditButton()"))
-        XCTAssertTrue(source.contains("RuleGroupIdentityEditor("))
-        XCTAssertTrue(source.contains("private func editableRuleIdentityButton"))
-        XCTAssertTrue(source.contains(".buttonStyle(.borderless)"))
-        XCTAssertTrue(source.contains(".frame(minHeight: 44)"))
-        XCTAssertTrue(source.contains("openIdentityEditor(for: group)"))
-        XCTAssertTrue(source.contains("TextField(\"Emoji\""))
-        XCTAssertTrue(source.contains("TextField(\"规则名称\""))
+        XCTAssertFalse(source.contains("struct RuleGroupIdentityEditor"), "不再单独弹出改名页")
+        XCTAssertFalse(detail.contains("Label(\"修改名称\", systemImage: \"pencil\")"))
+        XCTAssertFalse(detail.contains("Text(\"修改\")"))
+        XCTAssertTrue(detail.contains("TextField(\"Emoji\""))
+        XCTAssertTrue(detail.contains("TextField(\"规则名称\""))
+        XCTAssertTrue(detail.contains("OrderedPolicyCandidateSections("))
+        XCTAssertTrue(detail.contains(".environment(\\.editMode, .constant(isRoutingGroup ? .active : .inactive))"),
+                      "候选策略常驻拖动把手；节点组不进编辑模式，匹配方式菜单才能打开")
+        XCTAssertTrue(detail.contains("model.renameRuleGroup(named: group.name, to: newName, for: scheme)"))
+        XCTAssertFalse(source.contains("EditButton()"), "候选策略的拖动把手一直显示")
     }
 
     func testRuleGroupEmojiToggleKeepsRowGeometryStableWithoutImplicitAnimation() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
         let sheetStart = try XCTUnwrap(source.range(of: "private struct RuleCustomizationSheet: View"))
-        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleGroupIdentityEditor: View"))
+        let identityEditorStart = try XCTUnwrap(source.range(of: "private struct RuleSchemeNetworkSettingsEditor: View"))
         let sheetSource = String(source[sheetStart.lowerBound..<identityEditorStart.lowerBound])
         let menuStart = try XCTUnwrap(sheetSource.range(of: "ToolbarItem(placement: .cancellationAction)"))
         let confirmationStart = try XCTUnwrap(sheetSource.range(of: "ToolbarItemGroup(placement: .confirmationAction)"))
         let menuSource = String(sheetSource[menuStart.lowerBound..<confirmationStart.lowerBound])
         let emojiStart = try XCTUnwrap(sheetSource.range(of: "private func visibleRuleGroupEmoji"))
-        let identityStart = try XCTUnwrap(sheetSource.range(of: "private func openIdentityEditor"))
+        let identityStart = try XCTUnwrap(sheetSource.range(of: "private func groupModeTitle"))
         let emojiCall = String(sheetSource[emojiStart.lowerBound..<identityStart.lowerBound])
-        let componentStart = try XCTUnwrap(source.range(of: "private struct RuleGroupEmoji: View"))
+        let componentStart = try XCTUnwrap(source.range(of: "struct RuleGroupEmoji: View"))
         let componentEnd = try XCTUnwrap(source.range(of: "private struct RuleDetailLine: View"))
         let emojiSource = String(source[componentStart.lowerBound..<componentEnd.lowerBound])
 
@@ -499,8 +502,8 @@ final class RepositoryConsistencyTests: XCTestCase {
 
     func testCurrentRuleGroupNamesAlwaysUsePrimaryForeground() throws {
         let source = try sourceText("Tower/Features/Rules/RulesView.swift")
-        let rowStart = try XCTUnwrap(source.range(of: "private func customRuleGroupActionRow"))
-        let identityEditorStart = try XCTUnwrap(source.range(of: "private func openIdentityEditor"))
+        let rowStart = try XCTUnwrap(source.range(of: "private func customRuleGroupRow"))
+        let identityEditorStart = try XCTUnwrap(source.range(of: "private func groupRowDetail"))
         let rowSource = String(source[rowStart.lowerBound..<identityEditorStart.lowerBound])
 
         XCTAssertFalse(rowSource.contains("let enabled = model.selectedRuleGroupNames"))

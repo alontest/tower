@@ -856,6 +856,7 @@ final class AppModel {
         }
         customization.groupRenames = renames.isEmpty ? nil : renames
         customization.groupOrder = customization.groupOrder.map { $0 == oldName ? newName : $0 }
+        customization.matchingOrder = customization.matchingOrder?.map { $0 == oldName ? newName : $0 }
 
         if let existingOverride = customization.groupOverrides.removeValue(forKey: oldName) {
             customization.groupOverrides[newName] = existingOverride
@@ -913,6 +914,90 @@ final class AppModel {
         customization.groupOrder = uniqueNames
         ruleSchemeCustomizations[scheme.id] = customization
         persist()
+    }
+
+    /// Groups that own rules, in the order an exported configuration
+    /// reaches them.
+    func matchingRuleGroupNames(for scheme: RuleScheme) -> [String] {
+        let names = Set(customizableRuleGroups(for: scheme).map(\.name))
+        return RuleScheme.matchingGroupNames(of: customizableScheme(for: scheme).rulesets)
+            .filter(names.contains)
+    }
+
+    func setMatchingOrder(_ names: [String], for scheme: RuleScheme) {
+        var seen = Set<String>()
+        let unique = names.filter { seen.insert($0).inserted }
+        guard unique != matchingRuleGroupNames(for: scheme) else { return }
+        var customization = ruleSchemeCustomizations[scheme.id]
+            ?? RuleSchemeCustomization(schemeID: scheme.id)
+        customization.matchingOrder = unique
+        ruleSchemeCustomizations[scheme.id] = customization
+        persist()
+    }
+
+    /// Where a dragged group should match after it was dragged past other
+    /// groups in the client-ordered list. Dragged down past groups it used to
+    /// beat, it now matches right after the last of them to match; dragged
+    /// up past groups that used to beat it, right before the first of them.
+    /// Dragging up never lowers a group's priority and dragging down never
+    /// raises it, so a drag that already agrees with matching changes
+    /// nothing. Only the dragged group moves; a group without rules, or one
+    /// that passed no rule group, returns the order as is.
+    func matchingOrderAfterDragging(_ name: String, from previousDisplay: [String], to displayOrder: [String],
+                                    in scheme: RuleScheme) -> [String] {
+        let current = matchingRuleGroupNames(for: scheme)
+        guard let position = current.firstIndex(of: name),
+              let oldIndex = previousDisplay.firstIndex(of: name),
+              let newIndex = displayOrder.firstIndex(of: name), oldIndex != newIndex else { return current }
+        let movedDown = newIndex > oldIndex
+        let passed = Set(movedDown
+            ? displayOrder[oldIndex..<newIndex]
+            : displayOrder[(newIndex + 1)...oldIndex]).subtracting([name])
+        let positions = passed.compactMap { current.firstIndex(of: $0) }
+        var order = current
+        if movedDown {
+            guard let anchor = positions.filter({ $0 > position }).max() else { return current }
+            let anchorName = current[anchor]
+            order.remove(at: position)
+            order.insert(name, at: (order.firstIndex(of: anchorName) ?? order.endIndex - 1) + 1)
+        } else {
+            guard let anchor = positions.filter({ $0 < position }).min() else { return current }
+            let anchorName = current[anchor]
+            order.remove(at: position)
+            order.insert(name, at: order.firstIndex(of: anchorName) ?? 0)
+        }
+        return order
+    }
+
+    /// Sites that a reorder hands from one group to another: for every pair
+    /// of groups whose order flipped, the domains both of them match. The
+    /// earlier group used to win them; now the other one does.
+    func matchingOrderConflicts(from old: [String], to new: [String], in scheme: RuleScheme) -> [RuleOrderConflict] {
+        let newIndex = Dictionary(new.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        var flipped: [(winner: String, loser: String)] = []
+        for (i, earlier) in old.enumerated() {
+            for later in old[(i + 1)...] {
+                guard let a = newIndex[earlier], let b = newIndex[later], b < a else { continue }
+                flipped.append((later, earlier))
+            }
+        }
+        guard !flipped.isEmpty else { return [] }
+        var linesByGroup: [String: [String]] = [:]
+        for ruleset in customizableScheme(for: scheme).rulesets where ruleset.origin != .supplement {
+            linesByGroup[ruleset.groupName, default: []].append(contentsOf: ruleLines(for: ruleset))
+        }
+        var matchers: [String: RuleGroupDomainMatcher] = [:]
+        func matcher(_ name: String) -> RuleGroupDomainMatcher {
+            if let cached = matchers[name] { return cached }
+            let built = RuleGroupDomainMatcher(lines: linesByGroup[name] ?? [])
+            matchers[name] = built
+            return built
+        }
+        return flipped.compactMap { pair in
+            let shared = RuleGroupDomainMatcher.sharedHosts(matcher(pair.loser), matcher(pair.winner))
+            guard !shared.isEmpty else { return nil }
+            return RuleOrderConflict(from: pair.loser, to: pair.winner, domains: shared)
+        }
     }
 
     func resetRuleCustomization(for scheme: RuleScheme) {
@@ -1281,6 +1366,7 @@ final class AppModel {
         }
         guard var customization = ruleSchemeCustomizations[schemeID] else { return }
         customization.groupOrder = customization.groupOrder.map { $0 == oldName ? newName : $0 }
+        customization.matchingOrder = customization.matchingOrder?.map { $0 == oldName ? newName : $0 }
         if let oldOverride = customization.groupOverrides.removeValue(forKey: oldName) {
             customization.groupOverrides[newName] = oldOverride
         }
@@ -1388,6 +1474,7 @@ final class AppModel {
             customization.groupOrder = customizableRuleGroups(for: scheme).map(\.name)
         }
         customization.groupOrder.removeAll { $0 == groupName }
+        customization.matchingOrder?.removeAll { $0 == groupName }
         customization.groupOverrides[groupName] = nil
         ruleSchemeCustomizations[scheme.id] = customization
 
@@ -1483,6 +1570,103 @@ final class AppModel {
     func deleteCustomRuleFlow(_ flow: CustomRuleFlow) {
         customRuleFlows.removeAll { $0.id == flow.id }
         persist()
+    }
+
+    // MARK: Group supplements (issue #45)
+
+    private func supplementFlowIndex(forSourceGroup sourceName: String, schemeID: String) -> Int? {
+        customRuleFlows.firstIndex {
+            $0.schemeID == schemeID && $0.isGroupSupplement == true && $0.policyName == sourceName
+        }
+    }
+
+    /// Domains and IP ranges the user attached to this group, in the order added.
+    func supplementRules(forGroup visibleName: String, in scheme: RuleScheme) -> [SupplementRule] {
+        let sourceName = sourceRuleGroupName(visibleName, for: scheme)
+        return supplementFlowIndex(forSourceGroup: sourceName, schemeID: scheme.id)
+            .map { customRuleFlows[$0].supplementRules } ?? []
+    }
+
+    /// Adds a condition to one group. The same condition attached to another
+    /// group of this scheme moves here, so the user never has two answers for
+    /// one site. Returns the group it was moved from, if any.
+    @discardableResult
+    func addSupplementRule(_ rule: SupplementRule, toGroup visibleName: String, in scheme: RuleScheme) -> String? {
+        let key = rule.line.lowercased()
+        var movedFrom: String?
+        for index in customRuleFlows.indices
+        where customRuleFlows[index].schemeID == scheme.id && customRuleFlows[index].isGroupSupplement == true {
+            let rules = customRuleFlows[index].supplementRules
+            guard rules.contains(where: { $0.line.lowercased() == key }) else { continue }
+            let owner = ruleSchemeCustomizations[scheme.id]?.renamedGroupName(customRuleFlows[index].policyName)
+                ?? customRuleFlows[index].policyName
+            if owner == visibleName { return nil }
+            movedFrom = owner
+            customRuleFlows[index].rulesText = rules.filter { $0.line.lowercased() != key }
+                .map(\.line).joined(separator: "\n")
+        }
+        customRuleFlows.removeAll {
+            $0.schemeID == scheme.id && $0.isGroupSupplement == true && $0.supplementRules.isEmpty
+        }
+
+        let sourceName = sourceRuleGroupName(visibleName, for: scheme)
+        if let index = supplementFlowIndex(forSourceGroup: sourceName, schemeID: scheme.id) {
+            let rules = customRuleFlows[index].supplementRules + [rule]
+            customRuleFlows[index].rulesText = rules.map(\.line).joined(separator: "\n")
+            customRuleFlows[index].isEnabled = true
+        } else {
+            customRuleFlows.append(
+                .groupSupplement(schemeID: scheme.id, groupName: sourceName, rules: [rule])
+            )
+        }
+        persist()
+        return movedFrom
+    }
+
+    func removeSupplementRule(_ rule: SupplementRule, fromGroup visibleName: String, in scheme: RuleScheme) {
+        let sourceName = sourceRuleGroupName(visibleName, for: scheme)
+        guard let index = supplementFlowIndex(forSourceGroup: sourceName, schemeID: scheme.id) else { return }
+        let remaining = customRuleFlows[index].supplementRules.filter { $0 != rule }
+        if remaining.isEmpty {
+            customRuleFlows.remove(at: index)
+        } else {
+            customRuleFlows[index].rulesText = remaining.map(\.line).joined(separator: "\n")
+        }
+        persist()
+    }
+
+    /// Every rule list and inline rule that sends traffic to this group, in
+    /// matching order, without the user's own supplements.
+    func ruleSources(forGroup visibleName: String, in scheme: RuleScheme) -> [RuleSchemeRuleset] {
+        customizableScheme(for: scheme).rulesets.filter {
+            $0.groupName == visibleName && $0.origin != .supplement
+        }
+    }
+
+    /// The order an exported configuration evaluates rules in.
+    func exportedRuleOrder(for scheme: RuleScheme) -> [RuleSchemeRuleset] {
+        materializedScheme(scheme).rulesets
+    }
+
+    /// Conditions behind one ruleset, as a client would read them.
+    func ruleLines(for ruleset: RuleSchemeRuleset) -> [String] {
+        guard !ruleset.isBinaryRuleSet else { return [] }
+        return RuleResourceContent.normalized(
+            schemeRepository.lines(for: ruleset.resource),
+            behavior: ruleset.provider?.behavior
+        )
+    }
+
+    /// Where a site would go with this scheme's exported rules.
+    func probeRule(host: String, in scheme: RuleScheme) -> (result: RuleMatchProbe.Result, rulesets: [RuleSchemeRuleset]) {
+        let rulesets = exportedRuleOrder(for: scheme)
+        let result = RuleMatchProbe.probe(
+            host: host,
+            rulesets: rulesets,
+            lines: { self.ruleLines(for: $0) },
+            country: { [ipCountryLookupService] in ipCountryLookupService.countryCode(forLiteralAddress: $0) }
+        )
+        return (result, rulesets)
     }
 
     private func materializedScheme(_ scheme: RuleScheme) -> RuleScheme {
@@ -4025,7 +4209,7 @@ final class AppModel {
         if hadRulePriority, !UserDefaults.standard.bool(forKey: Self.rulePriorityResetNoticeKey) {
             UserDefaults.standard.set(true, forKey: Self.rulePriorityResetNoticeKey)
             showToast(
-                String(localized: "规则匹配顺序已恢复为方案原始顺序，拖动排序现在只影响显示。"),
+                String(localized: "规则匹配顺序已恢复为方案原始顺序。"),
                 symbol: "arrow.uturn.backward.circle.fill",
                 tone: .success
             )

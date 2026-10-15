@@ -2,6 +2,29 @@ import XCTest
 
 @MainActor
 final class RuleCustomizationInteractionTests: XCTestCase {
+    /// Groups open a detail page that edits rule groups in place; node-filter
+    /// groups still open their filter editor from a row on that page.
+    private func openRouting(_ app: XCUIApplication, group name: String) {
+        let row = app.buttons["rule-group-\(name)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5), name)
+        row.tap()
+        XCTAssertTrue(app.textFields["rule-group-name-field"].waitForExistence(timeout: 5), name)
+        let route = app.buttons["rule-group-routing-\(name)"]
+        if route.exists { route.tap() }
+    }
+
+    /// Candidates are added from one menu row under the current list.
+    private func openCandidateMenu(_ app: XCUIApplication) {
+        let add = app.buttons["policy-candidate-add"]
+        for _ in 0..<8 { if add.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(add.isHittable)
+        add.tap()
+    }
+
+    private func goBack(_ app: XCUIApplication) {
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+    }
+
     private func verifyLiveRuleImportFailureStaysInOverlay() throws {
         guard let url = ProcessInfo.processInfo.environment["TOWER_IMPORT_FAILURE_UI_URL"] else {
             throw XCTSkip("Requires an explicitly supplied public configuration with missing rule files")
@@ -108,7 +131,7 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         XCTAssertTrue(imported.isHittable); imported.tap()
         let search = app.searchFields.firstMatch
         search.tap(); search.typeText("YouTube")
-        let group = app.buttons["rule-group-identity-YouTube"]
+        let group = app.buttons["rule-group-YouTube"]
         XCTAssertTrue(group.waitForExistence(timeout: 5))
         group.press(forDuration: 1.2)
         app.buttons["删除"].firstMatch.tap()
@@ -147,7 +170,7 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let imported = app.buttons["编辑 导入的规则"]
         for _ in 0..<10 { if imported.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(imported.isHittable); imported.tap()
-        XCTAssertTrue(app.buttons["rule-group-routing-OpenAI"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["rule-group-OpenAI"].waitForExistence(timeout: 5))
         app.buttons["完成"].tap()
         XCTAssertTrue(imported.waitForExistence(timeout: 5))
         // Long press exposes deletion, and cancelling must retain the scheme.
@@ -331,10 +354,11 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("苹果")
-        let apple = app.buttons["rule-group-routing-🍎 苹果服务"]
-        XCTAssertTrue(apple.waitForExistence(timeout: 5)); apple.tap()
+        openRouting(app, group: "🍎 苹果服务")
+        openCandidateMenu(app)
         let create = app.buttons["custom-node-filter-create"]
-        for _ in 0..<10 { if create.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(app.navigationBars["添加候选策略"].waitForExistence(timeout: 5))
+        for _ in 0..<6 { if create.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(create.isHittable)
         let reject = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "拒绝")).firstMatch
         XCTAssertTrue(reject.exists)
@@ -364,20 +388,25 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5)); input.typeText("hk\n")
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: save)
         waitForExpectations(timeout: 5); save.tap()
-        let groupSave = app.buttons["node-filter-group-save"]
-        XCTAssertTrue(groupSave.waitForExistence(timeout: 5)); groupSave.tap()
+        // Candidates save in place: the new filter is already a candidate.
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "自定义节点")).firstMatch.waitForExistence(timeout: 5))
+        goBack(app)
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap(); search.buttons["清除文本"].tap(); search.typeText("自定义节点")
-        let route = app.buttons["rule-group-routing-自定义节点"]
-        XCTAssertTrue(route.waitForExistence(timeout: 5)); route.tap()
+        openRouting(app, group: "自定义节点")
         XCTAssertTrue(style.waitForExistence(timeout: 5))
         XCTAssertTrue(style.label.contains("包含关键词"))
+        XCTAssertFalse(app.buttons["node-filter-group-save"].exists, "Node filters are edited on the group page")
         let remove = app.buttons["删除关键词 hk"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5)); remove.tap()
-        XCTAssertFalse(groupSave.isEnabled, "Deleting the last keyword must not select all nodes")
         // The previous preview stays in place until the debounced result arrives.
         XCTAssertTrue(app.staticTexts["node-filter-empty-prompt"].waitForExistence(timeout: 5))
         XCTAssertTrue(help.exists)
+        // Deleting the last keyword must not save a filter that selects every node.
+        Thread.sleep(forTimeInterval: 1.5)
+        goBack(app)
+        openRouting(app, group: "自定义节点")
+        XCTAssertTrue(app.buttons["删除关键词 hk"].waitForExistence(timeout: 5))
     }
 
     func testNodeFilterDeletionPersistsWhenImmediatelyReopened() {
@@ -391,32 +420,28 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap(); search.typeText("苹果")
-        let apple = app.buttons["rule-group-routing-🍎 苹果服务"]
-        XCTAssertTrue(apple.waitForExistence(timeout: 5))
-        apple.tap()
+        openRouting(app, group: "🍎 苹果服务")
+        openCandidateMenu(app)
         let addJapan = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "日本节点")).firstMatch
-        for _ in 0..<8 { if addJapan.isHittable { break }; app.swipeUp() }
-        XCTAssertTrue(addJapan.isHittable)
+        XCTAssertTrue(addJapan.waitForExistence(timeout: 5))
         addJapan.tap()
-        app.buttons["node-filter-group-save"].tap()
+        goBack(app)
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.buttons["清除文本"].tap()
         search.typeText("日本")
-        let route = app.buttons["rule-group-routing-🇯🇵 日本节点"]
-        XCTAssertTrue(route.waitForExistence(timeout: 5))
-        XCTAssertTrue(route.label.contains("延迟优选"))
-        route.tap()
+        let row = app.buttons["rule-group-🇯🇵 日本节点"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("延迟优选"))
+        openRouting(app, group: "🇯🇵 日本节点")
         let remove = app.buttons["删除关键词 Japan"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5))
         remove.tap()
         XCTAssertFalse(remove.exists)
-        let save = app.buttons["node-filter-group-save"]
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: save)
-        waitForExpectations(timeout: 5)
-        save.tap()
-        XCTAssertTrue(route.waitForExistence(timeout: 5))
-        route.tap()
+        // Saves on its own once the preview has validated the change.
+        Thread.sleep(forTimeInterval: 1.5)
+        goBack(app)
+        openRouting(app, group: "🇯🇵 日本节点")
         let inputs = app.textFields.matching(identifier: "node-keyword-input")
         XCTAssertTrue(inputs.firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["删除关键词 Japan"].exists, "Deleted keyword must stay deleted when reopening from the same list")
@@ -442,35 +467,35 @@ final class RuleCustomizationInteractionTests: XCTestCase {
             XCTAssertTrue(search.waitForExistence(timeout: 5))
             search.tap()
             search.typeText("日本")
-            let route = app.buttons["rule-group-routing-🇯🇵 日本节点"]
-            XCTAssertTrue(route.waitForExistence(timeout: 5))
-            route.tap()
+            openRouting(app, group: "🇯🇵 日本节点")
         }
         func finishCustomization() {
-            if app.buttons["关闭"].exists { app.buttons["关闭"].firstMatch.tap() }
             let done = app.navigationBars["规则定制"].buttons["完成"]
+            if !done.exists { goBack(app) }
+            if app.buttons["关闭"].exists { app.buttons["关闭"].firstMatch.tap() }
             XCTAssertTrue(done.waitForExistence(timeout: 5))
             done.tap()
         }
         openGroup()
         let inputs = app.textFields.matching(identifier: "node-keyword-input")
         XCTAssertTrue(inputs.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["node-filter-group-save"].exists)
+        XCTAssertFalse(app.buttons["node-filter-group-save"].exists, "Edits save in place, no separate sheet")
         XCTAssertFalse(app.navigationBars["编辑节点筛选"].exists)
         XCTAssertFalse(app.buttons["添加节点筛选"].exists)
         XCTAssertEqual(app.buttons.matching(identifier: "node-keyword-add").count, 1)
         let count = app.staticTexts["node-filter-match-count"]
         XCTAssertTrue(count.waitForExistence(timeout: 5))
-        XCTAssertTrue(count.isHittable, "The preview should be visible without scrolling past the filter")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Compact node filter"
+        screenshot.name = "Inline node filter"
         screenshot.lifetime = .keepAlways
         self.add(screenshot)
         let first = inputs.element(boundBy: 0)
-        // Select the existing keyword explicitly: a tap in an intrinsic-width
-        // field positions the caret within the word, rather than at its end.
-        first.doubleTap()
-        first.typeText("JP QA\n")
+        // Replace the keyword by deleting it rather than double-tap selecting:
+        // a double tap on CJK text does not reliably select the whole word.
+        // Tap the trailing edge so the caret lands after the word, then erase it.
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        let existing = first.value as? String ?? ""
+        first.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count + 2) + "JP QA\n")
         XCTAssertEqual(first.value as? String, "JP QA")
         let add = app.buttons["node-keyword-add"]
         for _ in 0..<6 { if add.isHittable { break }; app.swipeUp() }
@@ -479,12 +504,9 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let empty = inputs.matching(NSPredicate(format: "value == nil OR value == '' OR value == %@", "关键词")).firstMatch
         XCTAssertTrue(empty.waitForExistence(timeout: 5))
         empty.tap()
+        // Deliberately no Return: the focused tag must be saved too.
         empty.typeText("Hong Kong [A+B]")
-        let save = app.buttons["node-filter-group-save"]
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: save)
-        waitForExpectations(timeout: 5)
-        // Deliberately save without Return: the focused tag must be persisted.
-        save.tap()
+        Thread.sleep(forTimeInterval: 1.5)
         finishCustomization()
         app.terminate(); app.launch()
         XCTAssertTrue(customize.waitForExistence(timeout: 15))
@@ -496,6 +518,7 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         for _ in 0..<6 { if remove.isHittable { break }; app.swipeUp() }
         remove.tap()
         XCTAssertFalse(added.exists)
+        Thread.sleep(forTimeInterval: 1.5)
         let raw = app.buttons["切换到正则表达式"]
         for _ in 0..<6 { if raw.isHittable { break }; app.swipeUp() }
         raw.tap()
@@ -506,20 +529,24 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let value = regex.value as? String ?? ""
         regex.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count) + "[")
         if app.buttons["收起键盘"].exists { app.buttons["收起键盘"].tap() }
-        XCTAssertFalse(save.isEnabled)
-        app.navigationBars["日本节点"].buttons["取消"].tap()
-        app.buttons["放弃更改"].tap()
+        XCTAssertTrue(app.staticTexts["节点筛选表达式无效"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1.5)
         finishCustomization()
         openGroup()
-        XCTAssertTrue(added.waitForExistence(timeout: 5))
+        // The invalid expression was never saved; the earlier removal was.
+        XCTAssertTrue(inputs.matching(NSPredicate(format: "value == %@", "JP QA")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(added.exists)
         let restore = app.buttons["恢复方案默认筛选"]
         for _ in 0..<12 { if restore.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(restore.isHittable)
         restore.tap()
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: save)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: restore)
         waitForExpectations(timeout: 5)
-        save.tap()
-        XCTAssertTrue(app.navigationBars["规则定制"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1.5)
+        finishCustomization()
+        openGroup()
+        XCTAssertFalse(inputs.matching(NSPredicate(format: "value == %@", "JP QA")).firstMatch.waitForExistence(timeout: 3),
+                       "Restoring the scheme default is saved too")
     }
 
     func testLocalLogicalRuleTextAndCompatibilityRoundTrip() {
@@ -586,22 +613,19 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let customize = app.buttons["编辑 ACL4SSR 默认"]
         XCTAssertTrue(customize.waitForExistence(timeout: 10))
         customize.tap()
-        let original = app.buttons["rule-group-identity-🌍 国外媒体"]
-        XCTAssertTrue(original.waitForExistence(timeout: 5))
-        original.tap()
-        let name = app.textFields["规则名称"]
+        app.buttons["rule-group-🌍 国外媒体"].tap()
+        // The name is edited on the group page itself and saves on Return.
+        let name = app.textFields["rule-group-name-field"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
-        app.buttons["取消"].tap()
-        XCTAssertTrue(original.waitForExistence(timeout: 5))
-        original.tap()
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "国外媒体")
         name.tap()
         let current = name.value as? String ?? ""
-        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + "媒体测试")
-        app.buttons["保存"].tap()
-        let renamed = app.buttons["rule-group-identity-🌍 媒体测试"]
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + "媒体测试\n")
+        XCTAssertTrue(app.navigationBars["媒体测试"].waitForExistence(timeout: 5))
+        goBack(app)
+        let renamed = app.buttons["rule-group-🌍 媒体测试"]
         XCTAssertTrue(renamed.waitForExistence(timeout: 5))
-        XCTAssertFalse(original.exists)
+        XCTAssertFalse(app.buttons["rule-group-🌍 国外媒体"].exists)
         app.buttons["完成"].tap()
         app.terminate()
         app.launch()
@@ -611,7 +635,6 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         renamed.tap()
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         XCTAssertEqual(name.value as? String, "媒体测试")
-        app.buttons["取消"].tap()
     }
 
     func testSaveSchemeCanCancelAndSaveFromNestedSheet() {
@@ -641,18 +664,16 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         app.launch()
         app.tabBars.buttons["规则"].tap()
         app.buttons["编辑 ACL4SSR 默认"].tap()
-        let route = app.buttons.matching(NSPredicate(format: "label == %@", "自动选择")).firstMatch
-        XCTAssertTrue(route.waitForExistence(timeout: 5))
-        route.tap()
+        openRouting(app, group: "🚀 节点选择")
+        openCandidateMenu(app)
         let manual = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "手动切换")).firstMatch
-        for _ in 0..<5 {
-            if manual.isHittable { break }
-            app.swipeUp()
-        }
         XCTAssertTrue(manual.waitForExistence(timeout: 5))
         manual.tap()
-        app.buttons["保存"].tap()
-        XCTAssertTrue(app.buttons["rule-group-identity-🚀 手动切换"].waitForExistence(timeout: 5))
+        goBack(app)
+        // A group without rules sits at the end of the same list, without a handle.
+        let manualGroup = app.buttons["rule-group-🚀 手动切换"]
+        for _ in 0..<8 { if manualGroup.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(manualGroup.waitForExistence(timeout: 5))
     }
 
     func testCatalogRemovalUpdatesCurrentRulesInDefaultEditingMode() {
@@ -668,8 +689,8 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         XCTAssertEqual(menu.label, "编辑")
         XCTAssertFalse(app.buttons["结束编辑"].exists)
-        let identity = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "rule-group-identity-")).firstMatch
-        XCTAssertTrue(identity.exists)
+        let group = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "rule-group-")).firstMatch
+        XCTAssertTrue(group.exists)
         let search = app.searchFields.firstMatch
         search.tap()
         search.typeText("OpenAI")
@@ -683,7 +704,7 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         let added = NSPredicate(format: "value == %@", "已添加")
         expectation(for: added, evaluatedWith: catalog)
         waitForExpectations(timeout: 30)
-        let openAIGroup = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "rule-group-identity-", "OpenAI")).firstMatch
+        let openAIGroup = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "rule-group-", "OpenAI")).firstMatch
         XCTAssertTrue(openAIGroup.waitForExistence(timeout: 5))
         app.buttons["关闭"].tap()
         app.buttons["完成"].tap()
@@ -708,5 +729,159 @@ final class RuleCustomizationInteractionTests: XCTestCase {
         attachment.name = "rule-customization-default-editing"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    /// Issue #45: a group shows what reaches it and accepts a site of its own.
+    func testGroupShowsItsRulesAndAcceptsAddedSite() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOWER_UI_TEST_RUN"] = UUID().uuidString
+        app.launchArguments = ["--tab=rules", "-hasSeenWelcome", "YES", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let customize = app.buttons["编辑 ACL4SSR 默认"]
+        XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
+
+        let media = app.buttons["rule-group-🌍 国外媒体"]
+        for _ in 0..<6 { if media.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(media.isHittable)
+        media.tap()
+        let list = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "ProxyMedia")).firstMatch
+        for _ in 0..<6 { if list.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(list.isHittable); list.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["ruleset-content"].waitForExistence(timeout: 5))
+        // Split by kind, like the choices for adding a site.
+        let keywords = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "关键词")).firstMatch
+        XCTAssertTrue(keywords.waitForExistence(timeout: 5)); keywords.tap()
+        XCTAssertTrue(app.staticTexts["openai"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["go.com"].exists)
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "全部")).firstMatch.tap()
+        let listSearch = app.searchFields.firstMatch
+        listSearch.tap(); listSearch.typeText("youtube")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "youtube")).firstMatch.waitForExistence(timeout: 5))
+        if app.buttons["关闭"].exists { app.buttons["关闭"].firstMatch.tap() }
+        goBack(app)
+
+        // The type menu opens even though the page keeps its drag handles on.
+        let kind = app.buttons["rule-group-kind-🌍 国外媒体"]
+        for _ in 0..<6 { if kind.isHittable { break }; app.swipeDown() }
+        XCTAssertTrue(kind.isHittable); kind.tap()
+        let urlTest = app.buttons["延迟优选"].firstMatch
+        XCTAssertTrue(urlTest.waitForExistence(timeout: 3), "策略类型菜单必须能打开")
+        urlTest.tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "延迟优选"), evaluatedWith: kind)
+        waitForExpectations(timeout: 5)
+
+        let addRule = app.buttons["rule-group-add-supplement"]
+        for _ in 0..<6 { if addRule.isHittable { break }; app.swipeDown() }
+        XCTAssertTrue(addRule.isHittable); addRule.tap()
+        let input = app.textFields["supplement-rule-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        input.typeText("203.0.113.7")
+        app.buttons["supplement-rule-save"].tap()
+        XCTAssertTrue(app.staticTexts["203.0.113.7/32"].waitForExistence(timeout: 5))
+        goBack(app)
+        XCTAssertTrue(media.waitForExistence(timeout: 5))
+        XCTAssertTrue(media.label.contains("我添加 1 条"), media.label)
+        app.navigationBars["规则定制"].buttons["完成"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
+        XCTAssertTrue(media.waitForExistence(timeout: 5))
+        XCTAssertTrue(media.label.contains("我添加 1 条"), media.label)
+
+        // Node groups only pick nodes; sites are added to routing groups.
+        let auto = app.buttons["rule-group-♻️ 自动选择"]
+        for _ in 0..<6 { if auto.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(auto.isHittable); auto.tap()
+        XCTAssertTrue(app.textFields["rule-group-name-field"].waitForExistence(timeout: 5))
+        // Type and node-name filter are edited right on this page.
+        XCTAssertFalse(app.buttons["rule-group-routing-♻️ 自动选择"].exists)
+        XCTAssertTrue(app.buttons["rule-group-kind-♻️ 自动选择"].exists)
+        // `.*` reads as words, not as an expression.
+        XCTAssertTrue(app.descendants(matching: .any)["node-filter-all"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textViews["node-filter-regex"].exists)
+        XCTAssertTrue(app.buttons["node-filter-use-keywords"].exists)
+        XCTAssertFalse(app.buttons["rule-group-add-supplement"].exists)
+        XCTAssertFalse(app.staticTexts["方案里的规则"].exists)
+    }
+
+    /// The list is in the order clients show the groups, every row drags,
+    /// and the order survives a relaunch.
+    func testDraggingRuleGroupChangesAndKeepsItsPlace() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOWER_UI_TEST_RUN"] = UUID().uuidString
+        app.launchArguments = ["--tab=rules", "-hasSeenWelcome", "YES", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let customize = app.buttons["编辑 ACL4SSR 默认"]
+        XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
+        let proxy = app.buttons["rule-group-🚀 节点选择"]
+        let telegram = app.buttons["rule-group-📲 电报信息"]
+        XCTAssertTrue(proxy.waitForExistence(timeout: 5))
+        XCTAssertTrue(telegram.waitForExistence(timeout: 5))
+        XCTAssertLessThan(proxy.frame.minY, telegram.frame.minY, "和客户端面板一样，节点选择排第一")
+        XCTAssertFalse(app.staticTexts["节点分组"].exists, "所有组在同一个列表里")
+
+        let width = app.windows.firstMatch.frame.width
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let handle = origin.withOffset(CGVector(dx: width - 30, dy: telegram.frame.midY))
+        let target = origin.withOffset(CGVector(dx: width - 30, dy: proxy.frame.minY + 4))
+        handle.press(forDuration: 0.6, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.3)
+        expectation(for: NSPredicate { _, _ in telegram.frame.minY < proxy.frame.minY }, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.alerts.firstMatch.exists, "拖动只调整策略组顺序，不弹匹配提示")
+
+        app.navigationBars["规则定制"].buttons["完成"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
+        XCTAssertTrue(telegram.waitForExistence(timeout: 5))
+        XCTAssertLessThan(telegram.frame.minY, proxy.frame.minY, "拖动后的顺序重启后仍在")
+    }
+
+    /// 全分组: dragging 📹 油管视频 below 🌍 国外媒体 hands YouTube's sites to
+    /// 国外媒体's list. The app says so, and undo puts both orders back.
+    func testDraggingYouTubeBelowForeignMediaWarnsAndCanUndo() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOWER_UI_TEST_RUN"] = UUID().uuidString
+        app.launchArguments = ["--tab=rules", "-hasSeenWelcome", "YES", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let customize = app.buttons["编辑 ACL4SSR 全分组"]
+        XCTAssertTrue(customize.waitForExistence(timeout: 15)); customize.tap()
+        let youtube = app.buttons["rule-group-📹 油管视频"]
+        let media = app.buttons["rule-group-🌍 国外媒体"]
+        XCTAssertTrue(youtube.waitForExistence(timeout: 5))
+        // Nudge the list a little at a time; a full swipe scrolls 油管视频 away
+        // before 国外媒体, nine rows lower, comes into view.
+        let nudgeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.7))
+        let nudgeEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.55))
+        for _ in 0..<12 where !media.isHittable {
+            nudgeStart.press(forDuration: 0.05, thenDragTo: nudgeEnd, withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        XCTAssertTrue(youtube.isHittable && media.isHittable)
+        XCTAssertLessThan(youtube.frame.minY, media.frame.minY)
+        let width = app.windows.firstMatch.frame.width
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        func dragYouTubeBelowMedia() {
+            origin.withOffset(CGVector(dx: width - 30, dy: youtube.frame.midY))
+                .press(forDuration: 0.6,
+                       thenDragTo: origin.withOffset(CGVector(dx: width - 30, dy: media.frame.maxY - 4)),
+                       withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+
+        dragYouTubeBelowMedia()
+        let alert = app.alerts["匹配结果会改变"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        // Examples are the shortest domains (ytimg.com, youtu.be…), so check
+        // the groups named rather than a particular site.
+        let message = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "油管视频", "国外媒体")).firstMatch
+        XCTAssertTrue(message.exists)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "drag-youtube-below-media"; shot.lifetime = .keepAlways; add(shot)
+        alert.buttons["撤销"].tap()
+        expectation(for: NSPredicate { _, _ in youtube.frame.minY < media.frame.minY }, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+
+        dragYouTubeBelowMedia()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["保留新顺序"].tap()
+        expectation(for: NSPredicate { _, _ in youtube.frame.minY > media.frame.minY }, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
     }
 }

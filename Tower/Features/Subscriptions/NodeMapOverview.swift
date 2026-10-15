@@ -369,9 +369,12 @@ private struct SelectedRegionNodes: View {
     let onCollapse: () -> Void
 
     var body: some View {
-        // Lazy for the same reason the subscription list is: a popular region
-        // can hold a hundred nodes and only a few are ever on screen.
-        LazyVStack(alignment: .leading, spacing: 0) {
+        // The heading sits outside the lazy stack. As the lazy stack's first
+        // row it made the page's ScrollView correct its offset by 4 pt when
+        // the list appeared, and snap back when it collapsed: the map card
+        // visibly jumped (since the 1.0.24 home card, where opening a region
+        // no longer scrolls the page enough to hide it).
+        VStack(alignment: .leading, spacing: 0) {
             // The heading collapses the list, matching a second tap on the map
             // marker. Without it the only way back was to find the dot again.
             Button(action: onCollapse) {
@@ -401,17 +404,21 @@ private struct SelectedRegionNodes: View {
             .accessibilityLabel(Text("收起 \(cluster.region.localizedName) 的节点"))
             .padding(.bottom, 4)
 
-            ForEach(cluster.nodes) { node in
-                CompactNodeRow(node: node, resolvesRegionOnAppear: false)
-                    .overlay(alignment: .bottom) {
-                        if node.id != cluster.nodes.last?.id {
-                            Divider()
-                                .padding(.leading, 42)
+            // Rows stay lazy, as in the subscription list: a popular region
+            // can hold a hundred nodes and only a few are ever on screen.
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(cluster.nodes) { node in
+                    CompactNodeRow(node: node, resolvesRegionOnAppear: false)
+                        .overlay(alignment: .bottom) {
+                            if node.id != cluster.nodes.last?.id {
+                                Divider()
+                                    .padding(.leading, 42)
+                            }
                         }
-                    }
-                    // Swapping countries replaces rows outright; only the
-                    // list's height animates, never two sets of rows at once.
-                    .transition(.identity)
+                        // Swapping countries replaces rows outright; only the
+                        // list's height animates, never two sets of rows at once.
+                        .transition(.identity)
+                }
             }
         }
         .padding(.top, 2)

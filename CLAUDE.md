@@ -45,7 +45,7 @@
 
 25. 分流规则只按各客户端文档输出：规则类型、选项、内置策略都以 `RoutingRuleCapabilities` / `RoutingBuiltinPolicies` 的白名单为准，选项写在策略名后面。不能表达的规则跳过并提示；拦截规则跳过时，要在兼容性提示最前面说明「这些请求不会被拦截」，但不阻止整份导出。可以换成等价写法的就换（例如 Loon 的 `*.x` 通配改写成「后缀 x 且不是 x 本身」的 `AND`/`NOT` 逻辑规则、sing-box 的 GEOIP / IP-ASN 用内置库展开），不能为了「看起来能导」把 Surge 方言原样透传，也不能改写成更宽的拦截范围。MRS 规则集没有解码器，只给 mihomo 系远程引用。Loon 和 QuanX 先匹配本地规则、再匹配远程列表，远程规则集不能排到任何本地规则前面。IP 规则默认自动加 `no-resolve`；唯一例外是 mihomo 系（不含 Karing 和与 Stash 同文档的「Clash」App）MATCH 前最后一条自动加的 `GEOIP`，而且只在 DNS 经代理带 ECS 解析时（或「跟随方案」）才去掉——别在 DNS 仍走国内解析时去掉，否则列表外的域名会全部泄露给国内 DNS。依据见 `docs/RULE_EXPORT_AUDIT.md`。
 
-26. 规则定制页拖动策略组只改变**显示顺序**（`groupOrder`），不改变规则匹配顺序。匹配顺序 = 来源方案顺序 + 用户添加的规则插到第一条冲突规则前面（`customRulesetInsertionIndex`）。策略组显示顺序和规则顺序本来就不一样（ACL4SSR 的「节点选择」显示第一，它的 GFW 大列表却在规则末尾），按显示顺序重排会让大列表压过 AI、奈飞、直连和广告拦截（issue #40）。`rulePriorityOrder` 只为清理旧数据保留读取，不要再写入或应用。以后要调整优先级，按 TODO 里的「优先匹配」方案单独做。
+26. 规则定制页的「分流规则」是一个列表、所有组都能拖，按**客户端里策略组的声明顺序**（`groupOrder`）排列，和规则首页「查看策略组」、导出到 Stash 等客户端的面板顺序必须一致（「节点选择」排第一）；不要单独拆出「节点分组」。**拖动同时调整被拖组的匹配优先级**（用户 2026-10-15 确认）：`AppModel.matchingOrderAfterDragging` 看这次拖动越过了哪些组——往下拖越过了原本排在它后面匹配的组，就改为紧跟在其中最后匹配的那个之后；往上拖越过了原本排在它前面匹配的组，就改为紧挨在其中最先匹配的那个之前（拖过头、越过多组时也成立）；往上拖从不降低优先级，往下拖从不提高，放下位置与现有匹配先后一致时匹配不变；没有规则的节点组只改面板顺序。结果存 `RuleSchemeCustomization.matchingOrder`，由 `RuleScheme.reordering` 应用：只有被拖的组整组移动，其余组每条规则原地不动，行尾 `GEOIP` 兜底规则留在原处。匹配一旦改变且有域名因此改走别的组（`matchingOrderConflicts` / `RuleGroupDomainMatcher`），必须弹「匹配结果会改变」并可「撤销」（同时恢复 `groupOrder` 和 `matchingOrder`）。绝不能把 `groupOrder` 整张套到规则上（issue #40：会让「节点选择」的 GFW 大列表压过 AI、奈飞、直连和广告拦截）。匹配顺序其余部分 = 来源方案顺序 + 规则库/规则集插到第一条冲突规则前（`customRulesetInsertionIndex`）+ 策略组详情「我添加的规则」（`CustomRuleFlow.isGroupSupplement`）永远最先、按 `SupplementRule.matchingOrder` 从具体到宽泛。`rulePriorityOrder` 只为清理旧数据保留读取，不要再写入或应用。
 
 ## 开发入口
 

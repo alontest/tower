@@ -187,7 +187,9 @@ struct RuleScheme: Identifiable, Codable, Hashable {
         groupCustomization: RuleSchemeCustomization? = nil,
         resolvedRuleLines: [URL: [String]] = [:]
     ) -> RuleScheme {
-        let candidateFlows = customRuleFlows.filter { $0.schemeID == id && $0.isEnabled }
+        let enabledFlows = customRuleFlows.filter { $0.schemeID == id && $0.isEnabled }
+        let supplementFlows = enabledFlows.filter { $0.isGroupSupplement == true }
+        let candidateFlows = enabledFlows.filter { $0.isGroupSupplement != true }
         var availableGroups = groups
         for group in groupCustomization?.addedNodeGroups ?? [] {
             availableGroups.removeAll { $0.name == group.name }
@@ -248,6 +250,11 @@ struct RuleScheme: Identifiable, Codable, Hashable {
                     ? expansion.ruleSet.inlinePolicies[index] : nil
                 return RuleSchemeRuleset(groupName: explicitPolicy ?? policyGroupName, resource: .inline(body))
             })
+            expansionRulesets = expansionRulesets.map {
+                var ruleset = $0
+                ruleset.origin = .added(expansion.ruleSet.name)
+                return ruleset
+            }
             let insertion = Self.customRulesetInsertionIndex(
                 for: expansion,
                 in: ordinaryRulesets,
@@ -274,6 +281,9 @@ struct RuleScheme: Identifiable, Codable, Hashable {
             mergedRulesets.append(ordinaryRulesets[index])
         }
         mergedRulesets.append(contentsOf: customRulesetsByInsertion[ordinaryRulesets.count])
+        if let order = groupCustomization?.matchingOrder, !order.isEmpty {
+            mergedRulesets = Self.reordering(mergedRulesets, by: order)
+        }
 
         for placement in generatedGroupPlacements {
             guard let currentIndex = availableGroups.firstIndex(where: {
@@ -293,10 +303,16 @@ struct RuleScheme: Identifiable, Codable, Hashable {
         var result = self
         result.groups = availableGroups
         // Matching order is the source's, with added rules ahead of the first
-        // rule they overlap. Group order is display only: applying it to the
-        // rules put 🚀 节点选择's GFW list ahead of AI, Netflix, direct and
-        // ad-block lists after any drag (issue #40).
-        result.rulesets = mergedRulesets + finalRulesets
+        // rule they overlap, and a dragged group moved as one block
+        // (`reordering`). `groupOrder` itself is never applied to the rules:
+        // doing that put 🚀 节点选择's GFW list ahead of AI, Netflix, direct
+        // and ad-block lists after any drag (issue #40). Conditions the user
+        // attached to a group come before all of it (issue #45).
+        result.rulesets = Self.supplementRulesets(
+            from: supplementFlows,
+            customization: groupCustomization,
+            validPolicies: validPolicies.subtracting(removedGroupNames)
+        ) + mergedRulesets + finalRulesets
         if groupCustomization?.overridesNetworkSettings == true {
             result.networkSettings = groupCustomization?.networkSettingsOverride
         }
@@ -320,6 +336,125 @@ struct RuleScheme: Identifiable, Codable, Hashable {
         }
         result.groups = availableGroups.filter { requiredNames.contains($0.name) }
         return result
+    }
+
+    /// Rule groups in the order a client first reaches them.
+    static func matchingGroupNames(of rulesets: [RuleSchemeRuleset]) -> [String] {
+        var seen = Set<String>()
+        return rulesets.compactMap { ruleset in
+            if case .inline(let rule) = ruleset.resource, rule.uppercased() == "FINAL" { return nil }
+            guard ruleset.origin != .supplement,
+                  !RoutingBuiltinPolicies.names.contains(ruleset.groupName),
+                  seen.insert(ruleset.groupName).inserted else { return nil }
+            return ruleset.groupName
+        }
+    }
+
+    /// Applies a dragged matching order while touching as little as
+    /// possible. Groups whose relative order the user kept (the longest
+    /// subsequence still in source order) stay exactly where the source put
+    /// each of their rules; only the groups that were moved are lifted out as
+    /// one block and placed right before the next unmoved group. A trailing
+    /// `GEOIP` fallback stays put, so moving 🎯 全球直连 does not make every
+    /// unmatched domain resolve early.
+    static func reordering(_ rulesets: [RuleSchemeRuleset], by order: [String]) -> [RuleSchemeRuleset] {
+        let sourceOrder = matchingGroupNames(of: rulesets)
+        let rank = Dictionary(uniqueKeysWithValues: sourceOrder.enumerated().map { ($1, $0) })
+        var seen = Set<String>()
+        let desired = order.filter { rank[$0] != nil && seen.insert($0).inserted }
+        guard desired.count > 1 else { return rulesets }
+
+        let kept = Set(longestIncreasingSubsequence(desired.map { rank[$0] ?? 0 }).map { desired[$0] })
+        let movedNames = Set(desired.filter { !kept.contains($0) })
+        guard !movedNames.isEmpty else { return rulesets }
+        func isAnchored(_ ruleset: RuleSchemeRuleset) -> Bool {
+            guard case .inline(let rule) = ruleset.resource else { return false }
+            return rule.uppercased().hasPrefix("GEOIP,")
+        }
+        func lifts(_ ruleset: RuleSchemeRuleset) -> Bool {
+            ruleset.origin != .supplement && movedNames.contains(ruleset.groupName) && !isAnchored(ruleset)
+        }
+
+        var blocks: [String: [RuleSchemeRuleset]] = [:]
+        for ruleset in rulesets where lifts(ruleset) {
+            blocks[ruleset.groupName, default: []].append(ruleset)
+        }
+        // Each moved group lands before the next group after it that stayed;
+        // one dragged past every kept group lands right after the last of
+        // them, still ahead of the trailing GEOIP fallback.
+        var pending: [String: [RuleSchemeRuleset]] = [:]
+        var trailing: [RuleSchemeRuleset] = []
+        for (index, name) in desired.enumerated() where movedNames.contains(name) {
+            let block = blocks[name] ?? []
+            if let anchor = desired[(index + 1)...].first(where: kept.contains) {
+                pending[anchor, default: []].append(contentsOf: block)
+            } else {
+                trailing.append(contentsOf: block)
+            }
+        }
+
+        var result: [RuleSchemeRuleset] = []
+        for ruleset in rulesets where !lifts(ruleset) {
+            if ruleset.origin != .supplement, let block = pending.removeValue(forKey: ruleset.groupName) {
+                result.append(contentsOf: block)
+            }
+            result.append(ruleset)
+        }
+        guard !trailing.isEmpty else { return result }
+        let lastKept = desired.last(where: kept.contains)
+        let insertion = result.lastIndex { !isAnchored($0) && $0.groupName == lastKept }
+            .map { $0 + 1 } ?? result.endIndex
+        result.insert(contentsOf: trailing, at: insertion)
+        return result
+    }
+
+    /// Indices of one longest strictly increasing subsequence.
+    private static func longestIncreasingSubsequence(_ values: [Int]) -> [Int] {
+        var tails: [Int] = []
+        var previous = Array(repeating: -1, count: values.count)
+        for (index, value) in values.enumerated() {
+            var low = 0, high = tails.count
+            while low < high {
+                let middle = (low + high) / 2
+                if values[tails[middle]] < value { low = middle + 1 } else { high = middle }
+            }
+            if low > 0 { previous[index] = tails[low - 1] }
+            if low == tails.count { tails.append(index) } else { tails[low] = index }
+        }
+        var result: [Int] = []
+        var cursor = tails.last ?? -1
+        while cursor >= 0 {
+            result.append(cursor)
+            cursor = previous[cursor]
+        }
+        return result.reversed()
+    }
+
+    /// Most specific first, then in the order they were added. A condition
+    /// already claimed by an earlier group is not emitted twice.
+    static func supplementRulesets(
+        from flows: [CustomRuleFlow],
+        customization: RuleSchemeCustomization?,
+        validPolicies: Set<String>
+    ) -> [RuleSchemeRuleset] {
+        let entries = flows.flatMap { flow -> [(rule: SupplementRule, policy: String)] in
+            let policy = customization?.renamedGroupName(flow.policyName) ?? flow.policyName
+            guard validPolicies.contains(policy) else { return [] }
+            return flow.supplementRules.map { ($0, policy) }
+        }
+        var seen = Set<String>()
+        return entries.enumerated().sorted { lhs, rhs in
+            if SupplementRule.matchingOrder(lhs.element.rule, rhs.element.rule) { return true }
+            if SupplementRule.matchingOrder(rhs.element.rule, lhs.element.rule) { return false }
+            return lhs.offset < rhs.offset
+        }.compactMap { entry in
+            guard seen.insert(entry.element.rule.line.lowercased()).inserted else { return nil }
+            return RuleSchemeRuleset(
+                groupName: entry.element.policy,
+                resource: .inline(entry.element.rule.line),
+                origin: .supplement
+            )
+        }
     }
 
     private static func customRulesetInsertionIndex(
@@ -929,6 +1064,10 @@ struct RuleSchemeCustomization: Codable, Hashable {
     /// No longer applied or written; still decoded so `AppModel.apply` can
     /// clear it and tell the user their routing was restored (issue #40).
     var rulePriorityOrder: [String]?
+    /// Matching order of the rule groups after the user dragged one (issue
+    /// #45). Only groups actually moved change place (`RuleScheme.reordering`);
+    /// unlike the old `rulePriorityOrder` it is never the display order.
+    var matchingOrder: [String]?
     var groupOverrides: [String: RuleSchemeGroupOverride]
     /// Source policy names mapped to user-facing names. Optional keeps every
     /// snapshot written before identity editing decodable without migration.
@@ -946,6 +1085,7 @@ struct RuleSchemeCustomization: Codable, Hashable {
         addedNodeGroups: [RuleSchemeGroup]? = nil,
         groupOrder: [String] = [],
         rulePriorityOrder: [String]? = nil,
+        matchingOrder: [String]? = nil,
         groupOverrides: [String: RuleSchemeGroupOverride] = [:],
         groupRenames: [String: String]? = nil,
         removedGroupNames: Set<String>? = nil,
@@ -956,6 +1096,7 @@ struct RuleSchemeCustomization: Codable, Hashable {
         self.addedNodeGroups = addedNodeGroups
         self.groupOrder = groupOrder
         self.rulePriorityOrder = rulePriorityOrder
+        self.matchingOrder = matchingOrder
         self.groupOverrides = groupOverrides
         self.groupRenames = groupRenames
         self.removedGroupNames = removedGroupNames
@@ -1204,6 +1345,16 @@ struct RuleSchemeRuleset: Codable, Hashable {
     let groupName: String
     let resource: Resource
 
+    /// Where a materialized ruleset came from, for display only. Never
+    /// persisted and ignored by equality, so generation and caches are
+    /// unaffected.
+    enum Origin: Hashable {
+        /// A condition the user attached to an existing group.
+        case supplement
+        /// A catalog item or a ruleset from the user's library.
+        case added(String)
+    }
+
     /// mihomo's binary rule set format (`format: mrs`). Tower has no decoder
     /// for it: it is never downloaded or read as text.
     var isBinaryRuleSet: Bool {
@@ -1213,6 +1364,23 @@ struct RuleSchemeRuleset: Codable, Hashable {
     /// Options on a FINAL or remote reference survive persistence and group edits.
     var options: [String]? = nil
     var provider: RuleProviderMetadata? = nil
+    var origin: Origin? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case groupName, resource, options, provider
+    }
+
+    static func == (lhs: RuleSchemeRuleset, rhs: RuleSchemeRuleset) -> Bool {
+        lhs.groupName == rhs.groupName && lhs.resource == rhs.resource
+            && lhs.options == rhs.options && lhs.provider == rhs.provider
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(groupName)
+        hasher.combine(resource)
+        hasher.combine(options)
+        hasher.combine(provider)
+    }
 }
 
 struct RuleProviderMetadata: Codable, Hashable {

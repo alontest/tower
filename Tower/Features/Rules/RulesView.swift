@@ -208,7 +208,7 @@ private struct RuleDisclosureRow: View {
 }
 
 /// Imported groups display only the emoji actually present in their names.
-private struct RuleGroupEmoji: View {
+struct RuleGroupEmoji: View {
     let group: RuleSchemeGroup
     let isVisible: Bool
     let inferFromName: Bool
@@ -530,20 +530,6 @@ private struct CatalogRuleEditorRequest: Identifiable {
     var id: UUID { flow.id }
 }
 
-private struct RuleGroupEditorRequest: Identifiable {
-    let scheme: RuleScheme
-    let group: RuleSchemeGroup
-
-    var id: String { "\(scheme.id)::\(group.name)" }
-}
-
-private struct RuleGroupIdentityEditorRequest: Identifiable {
-    let scheme: RuleScheme
-    let group: RuleSchemeGroup
-
-    var id: String { "identity::\(scheme.id)::\(group.name)" }
-}
-
 private struct RuleGroupDeletionRequest: Identifiable {
     let scheme: RuleScheme
     let group: RuleSchemeGroup
@@ -591,6 +577,28 @@ private enum RuleCustomizationDeletion {
     }
 }
 
+/// A drag that changed where some sites go, kept until the user keeps or
+/// undoes it.
+private struct ReorderNotice {
+    let previousGroups: [String]
+    let previousMatching: [String]
+    let conflicts: [RuleOrderConflict]
+
+    var message: String {
+        var lines = conflicts.prefix(3).map { conflict in
+            let from = RulePolicyPresentation.nameWithoutLeadingEmoji(conflict.from)
+            let to = RulePolicyPresentation.nameWithoutLeadingEmoji(conflict.to)
+            // Shortest first: youtube.com says more than youtubei.googleapis.com.
+            let examples = conflict.domains.sorted { $0.count < $1.count }.prefix(2).joined(separator: "、")
+            return String(localized: "「\(from)」中 \(conflict.domains.count) 个域名改走「\(to)」，如 \(examples)")
+        }
+        if conflicts.count > 3 { lines.append("…") }
+        lines.append("")
+        lines.append(String(localized: "规则从上到下匹配，同一个域名只会命中排在前面的组。"))
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// One predictable place for every rule-level decision: existing service
 /// groups, protected routing primitives, maintained catalogs and advanced
 /// hand-written rules. Search is the primary path; raw syntax stays one level
@@ -600,14 +608,15 @@ private struct RuleCustomizationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let scheme: RuleScheme
-    @State private var editingGroups: [RuleSchemeGroup] = []
-    @State private var initialEditingGroupNames: [String] = []
+    @State private var path: [RuleCustomizationRoute] = []
     @State private var searchText = ""
+    /// Local copy of the dragged order so the list does not jump while the
+    /// scheme is rematerialized.
+    @State private var draftGroupOrder: [String] = []
+    @State private var reorderNotice: ReorderNotice?
     @State private var selectedCategory: RuleCatalogCategory?
     @State private var manualEditor: LocalRuleSetEditorRequest?
     @State private var catalogEditor: CatalogRuleEditorRequest?
-    @State private var groupEditor: RuleGroupEditorRequest?
-    @State private var identityEditor: RuleGroupIdentityEditorRequest?
     @State private var networkSettingsEditor: RuleScheme?
     @State private var configurationEditor: RuleScheme?
     @State private var pendingDeletion: RuleCustomizationDeletion?
@@ -620,15 +629,27 @@ private struct RuleCustomizationSheet: View {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var visibleGroups: [RuleSchemeGroup] {
-        let groups = editingGroups.isEmpty
-            ? model.customizableRuleGroups(for: scheme)
-            : editingGroups
-        guard !trimmedSearch.isEmpty else { return groups }
-        return groups.filter {
-            $0.name.localizedCaseInsensitiveContains(trimmedSearch)
-                || groupModeTitle($0).localizedCaseInsensitiveContains(trimmedSearch)
-        }
+    private var groups: [RuleSchemeGroup] {
+        model.customizableRuleGroups(for: scheme)
+    }
+
+    private func matchesSearch(_ group: RuleSchemeGroup) -> Bool {
+        trimmedSearch.isEmpty
+            || group.name.localizedCaseInsensitiveContains(trimmedSearch)
+            || groupModeTitle(group).localizedCaseInsensitiveContains(trimmedSearch)
+    }
+
+    /// Every group in one list, in the order clients show them. The home
+    /// card preview and every export use the same order.
+    private var listGroups: [RuleSchemeGroup] {
+        guard !draftGroupOrder.isEmpty else { return groups }
+        let byName = Dictionary(groups.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = draftGroupOrder.compactMap { byName[$0] }
+        return ordered.count == groups.count ? ordered : groups
+    }
+
+    private var finalGroupName: String? {
+        model.customizableScheme(for: scheme).finalGroupName
     }
 
     private var visibleCatalogEntries: [RuleCatalogEntry] {
@@ -651,10 +672,10 @@ private struct RuleCustomizationSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 schemeUsageSection
-                customRuleGroupsSection
+                ruleGroupsSection
                 localRuleSetsSection
                 catalogSections
             }
@@ -671,6 +692,14 @@ private struct RuleCustomizationSheet: View {
             )
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("rule-customization-list")
+            .navigationDestination(for: RuleCustomizationRoute.self) { route in
+                switch route {
+                case .group(let name):
+                    RuleGroupDetailView(scheme: scheme, groupName: name) { group in
+                        requestDeletion(of: group)
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Menu {
@@ -709,7 +738,6 @@ private struct RuleCustomizationSheet: View {
                 }
                 ToolbarItemGroup(placement: .confirmationAction) {
                     Button("完成") {
-                        commitEditingGroupOrder()
                         dismiss()
                     }
                 }
@@ -720,13 +748,6 @@ private struct RuleCustomizationSheet: View {
             }
             .sheet(item: $catalogEditor) { request in
                 CatalogRuleRouteEditor(scheme: request.scheme, flow: request.flow)
-            }
-            .sheet(item: $groupEditor) { request in
-                RuleGroupEditor(scheme: request.scheme, group: request.group)
-                    .environment(model)
-            }
-            .sheet(item: $identityEditor, onDismiss: reloadEditingGroupsIfNeeded) { request in
-                RuleGroupIdentityEditor(model: model, scheme: request.scheme, group: request.group)
             }
             .sheet(item: $networkSettingsEditor) { editableScheme in
                 RuleSchemeNetworkSettingsEditor(scheme: editableScheme)
@@ -750,7 +771,7 @@ private struct RuleCustomizationSheet: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("这会移除当前方案后来添加的规则、改名、Emoji 设置和排序；“我的规则集”中的本地内容会保留。")
+                Text("这会移除当前方案后来添加的规则、改名和 Emoji 设置；“我的规则集”中的本地内容会保留。")
             }
             .alert(
                 pendingDeletion?.title ?? String(localized: "确认删除"),
@@ -767,6 +788,7 @@ private struct RuleCustomizationSheet: View {
                     case .localRuleSet(let ruleSet):
                         model.deleteLocalRuleSet(ruleSet)
                     case .group(let request):
+                        if path.last == .group(request.group.name) { path.removeLast() }
                         model.deleteRuleGroup(named: request.group.name, for: request.scheme)
                     }
                     pendingDeletion = nil
@@ -774,6 +796,24 @@ private struct RuleCustomizationSheet: View {
                 Button("取消", role: .cancel) { pendingDeletion = nil }
             } message: { deletion in
                 Text(deletion.message)
+            }
+            .alert(
+                "匹配结果会改变",
+                isPresented: Binding(
+                    get: { reorderNotice != nil },
+                    set: { if !$0 { reorderNotice = nil } }
+                ),
+                presenting: reorderNotice
+            ) { notice in
+                Button("撤销") {
+                    draftGroupOrder = notice.previousGroups
+                    model.setRuleGroupOrder(notice.previousGroups, for: scheme)
+                    model.setMatchingOrder(notice.previousMatching, for: scheme)
+                    reorderNotice = nil
+                }
+                Button("保留新顺序", role: .cancel) { reorderNotice = nil }
+            } message: { notice in
+                Text(notice.message)
             }
             .alert("无法添加规则", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -786,20 +826,17 @@ private struct RuleCustomizationSheet: View {
             .towerToast()
         }
         .presentationDetents([.large])
-        .onAppear {
-            synchronizeGroupDraft(with: model.customizableRuleGroups(for: scheme))
+        .onChange(of: groups.map(\.name)) { _, names in
+            draftGroupOrder = names
         }
-        .onChange(of: model.customizableRuleGroups(for: scheme)) { _, groups in
-            synchronizeGroupDraft(with: groups)
-        }
-        .onDisappear { commitEditingGroupOrder() }
     }
 
     private func restoreInitialRules() {
         searchText = ""
         selectedCategory = nil
+        path = []
+        draftGroupOrder = []
         model.resetRuleCustomization(for: scheme)
-        synchronizeGroupDraft(with: model.customizableRuleGroups(for: scheme))
     }
 
     private func toggleRuleGroupEmojiVisibilityAfterMenuDismiss() {
@@ -813,24 +850,6 @@ private struct RuleCustomizationSheet: View {
                 model.setRuleGroupEmojisEnabled(enabled, for: scheme)
             }
         }
-    }
-
-    private func commitEditingGroupOrder() {
-        guard !editingGroups.isEmpty else { return }
-        let names = editingGroups.map(\.name)
-        guard names != initialEditingGroupNames else { return }
-        model.setRuleGroupOrder(names, for: scheme)
-        initialEditingGroupNames = names
-    }
-
-    private func reloadEditingGroupsIfNeeded() {
-        synchronizeGroupDraft(with: model.customizableRuleGroups(for: scheme))
-    }
-
-    private func synchronizeGroupDraft(with groups: [RuleSchemeGroup]) {
-        guard editingGroups != groups else { return }
-        editingGroups = groups
-        initialEditingGroupNames = groups.map(\.name)
     }
 
     private var categoryPicker: some View {
@@ -951,43 +970,103 @@ private struct RuleCustomizationSheet: View {
         }
     }
 
+    /// One list in the order clients show the groups, the same order as the
+    /// home card preview and the export. Dragging a group that owns rules
+    /// also moves its matching priority next to where it was dropped (issue
+    /// #45); only that group moves, never the whole list (issue #40).
     @ViewBuilder
-    private var customRuleGroupsSection: some View {
-        if !visibleGroups.isEmpty {
+    private var ruleGroupsSection: some View {
+        let visible = listGroups.filter(matchesSearch)
+        if !visible.isEmpty {
             Section {
-                ForEach(visibleGroups, id: \.name) { group in
-                    customRuleGroupActionRow(group)
+                ForEach(visible, id: \.name) { group in
+                    groupRow(group)
                         .background(MacListReorderBridge(enabled: trimmedSearch.isEmpty))
-                        .listRowInsets(compactRuleRowInsets)
                         .moveDisabled(!trimmedSearch.isEmpty)
-                        .contextMenu {
-                            if let flow = userCreatedFlow(for: group), let ruleSet = localRuleSet(for: flow) {
-                                Button {
-                                    manualEditor = LocalRuleSetEditorRequest(ruleSet: ruleSet)
-                                } label: {
-                                    Label("编辑规则内容", systemImage: "doc.text.magnifyingglass")
-                                }
-                            }
-                            Button(role: .destructive) { requestDeletion(of: group) } label: {
-                                Label("删除", systemImage: "trash")
-                            }
-                        }
                 }
                 .onMove { source, destination in
                     guard trimmedSearch.isEmpty else { return }
-                    editingGroups.move(fromOffsets: source, toOffset: destination)
-                    commitEditingGroupOrder()
+                    moveGroups(from: source, to: destination)
                 }
             } header: {
                 HStack {
-                    Text("策略组")
+                    Text("分流规则")
                     Spacer()
-                    Text("\(visibleGroups.count) 组")
+                    Text("\(visible.count) 组")
                 }
             } footer: {
-                Text("拖动排序只改变显示顺序，不影响分流。")
+                Text("拖动调整策略组在客户端里的顺序，也调整它的匹配优先级：拖到某组下面就排在它之后匹配，拖到上面就排在它之前。有网站因此改走别的组时会提示，可以撤销。")
             }
         }
+    }
+
+    private func groupRow(_ group: RuleSchemeGroup) -> some View {
+        Button {
+            path.append(.group(group.name))
+        } label: {
+            HStack(spacing: 10) {
+                customRuleGroupRow(group)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SelectionIndicatorButtonStyle())
+        .listRowInsets(compactRuleRowInsets)
+        .accessibilityIdentifier("rule-group-\(group.name)")
+        .contextMenu {
+            if let flow = userCreatedFlow(for: group), let ruleSet = localRuleSet(for: flow) {
+                Button {
+                    manualEditor = LocalRuleSetEditorRequest(ruleSet: ruleSet)
+                } label: {
+                    Label("编辑规则内容", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+            Button(role: .destructive) { requestDeletion(of: group) } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private func moveGroups(from source: IndexSet, to destination: Int) {
+        let previous = listGroups.map(\.name)
+        guard let from = source.first else { return }
+        let moved = previous[from]
+        var names = previous
+        names.move(fromOffsets: source, toOffset: destination)
+        guard names != previous else { return }
+        let previousMatching = model.matchingRuleGroupNames(for: scheme)
+        let newMatching = model.matchingOrderAfterDragging(moved, from: previous, to: names, in: scheme)
+        // First match wins in every client, so passing a group that matches
+        // the same sites hands them over. Say which, and offer to undo,
+        // rather than let the export change silently.
+        let conflicts = model.matchingOrderConflicts(from: previousMatching, to: newMatching, in: scheme)
+        let scattered = newMatching != previousMatching && scatteredRuleCount(of: moved) > 1
+        draftGroupOrder = names
+        model.setRuleGroupOrder(names, for: scheme)
+        model.setMatchingOrder(newMatching, for: scheme)
+        if !conflicts.isEmpty {
+            reorderNotice = ReorderNotice(previousGroups: previous, previousMatching: previousMatching, conflicts: conflicts)
+        } else if scattered {
+            model.showToast(
+                String(localized: "「\(RulePolicyPresentation.nameWithoutLeadingEmoji(moved))」的规则原本分布在多处，已一起移到这里"),
+                symbol: "arrow.up.arrow.down",
+                tone: .neutral
+            )
+        }
+    }
+
+    /// Number of separate places a group's rules appear in matching order.
+    private func scatteredRuleCount(of name: String) -> Int {
+        var runs = 0
+        var previous: String?
+        for ruleset in model.customizableScheme(for: scheme).rulesets where ruleset.origin != .supplement {
+            if ruleset.groupName == name, previous != name { runs += 1 }
+            previous = ruleset.groupName
+        }
+        return runs
     }
 
     private func userCreatedFlow(for group: RuleSchemeGroup) -> CustomRuleFlow? {
@@ -1063,58 +1142,38 @@ private struct RuleCustomizationSheet: View {
         )
     }
 
-    private func customRuleGroupActionRow(_ group: RuleSchemeGroup) -> some View {
+    private func customRuleGroupRow(_ group: RuleSchemeGroup) -> some View {
         HStack(spacing: 10) {
-            editableRuleIdentityButton(group)
-            Spacer(minLength: 8)
-            Button {
-                groupEditor = RuleGroupEditorRequest(scheme: scheme, group: group)
-            } label: {
-                HStack(spacing: 4) {
-                    Text(groupSelectionSummary(group))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                }
-                .font(.subheadline)
-                .foregroundStyle(Color.accentColor)
-                .frame(minHeight: 44)
-            }
-            .buttonStyle(SelectionIndicatorButtonStyle())
-            .accessibilityIdentifier("rule-group-routing-" + group.name)
-        }
-    }
-
-    private func editableRuleIdentityButton(_ group: RuleSchemeGroup) -> some View {
-        Button {
-            openIdentityEditor(for: group)
-        } label: {
-            HStack(spacing: 10) {
-                visibleRuleGroupEmoji(group)
+            visibleRuleGroupEmoji(group)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(RulePolicyPresentation.nameWithoutLeadingEmoji(group.name))
                     .foregroundStyle(Color.primary)
-                Image(systemName: "pencil")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                Text(groupRowDetail(group))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .contentShape(Rectangle())
-            .frame(minHeight: 44)
         }
-        .buttonStyle(.borderless)
-        .accessibilityLabel("修改 \(group.name) 的 Emoji 和名称")
-        .accessibilityIdentifier("rule-group-identity-\(group.name)")
+        .frame(minHeight: 44)
+    }
+
+    /// "→ 节点选择 · 2 个列表 · 我添加 3 条": where it goes and what feeds it.
+    private func groupRowDetail(_ group: RuleSchemeGroup) -> String {
+        if group.name == finalGroupName {
+            return String(localized: "→ \(groupSelectionSummary(group)) · 其余所有流量")
+        }
+        var parts = scheme.groupEditorMode(for: group) == .nodePatternsOnly
+            ? [String(localized: "\(group.kind.displayTitle) · 按节点名称筛选")]
+            : [String(localized: "→ \(groupSelectionSummary(group))")]
+        let sources = model.ruleSources(forGroup: group.name, in: scheme).count
+        if sources > 0 { parts.append(String(localized: "\(sources) 项规则")) }
+        let added = model.supplementRules(forGroup: group.name, in: scheme).count
+        if added > 0 { parts.append(String(localized: "我添加 \(added) 条")) }
+        return parts.joined(separator: " · ")
     }
 
     private func visibleRuleGroupEmoji(_ group: RuleSchemeGroup) -> some View {
         RuleGroupEmoji(group: group, isVisible: model.ruleGroupEmojisAreEnabled(for: scheme), inferFromName: scheme.isBundled)
-    }
-
-    private func openIdentityEditor(for group: RuleSchemeGroup) {
-        commitEditingGroupOrder()
-        identityEditor = RuleGroupIdentityEditorRequest(
-            scheme: scheme,
-            group: group
-        )
     }
 
     private func groupModeTitle(_ group: RuleSchemeGroup) -> String {
@@ -1129,7 +1188,11 @@ private struct RuleCustomizationSheet: View {
             guard case .reference(let name) = member else { return nil }
             return name
         }).first {
-            return RulePolicyPresentation.nameWithoutLeadingEmoji(reference)
+            switch reference.uppercased() {
+            case "DIRECT": return String(localized: "直连")
+            case "REJECT": return String(localized: "拒绝")
+            default: return RulePolicyPresentation.nameWithoutLeadingEmoji(reference)
+            }
         }
         return group.kind.displayTitle
     }
@@ -1714,290 +1777,15 @@ private struct RuleSchemeConfigurationEditor: View {
     }
 }
 
-private struct RuleGroupIdentityEditor: View {
-    // Catalyst may not carry the observable environment into this nested sheet.
-    // Keep the same model explicitly, as in SaveCustomizedSchemeSheet.
-    private let model: AppModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var requestsDiscard = false
-    let scheme: RuleScheme
-    let group: RuleSchemeGroup
-    @State private var emoji: String
-    @State private var name: String
-    @State private var errorMessage: String?
-
-    init(model: AppModel, scheme: RuleScheme, group: RuleSchemeGroup) {
-        self.model = model
-        self.scheme = scheme
-        self.group = group
-        _emoji = State(initialValue: RulePolicyPresentation.emoji(for: group.name, kind: group.kind, inferFromName: false))
-        _name = State(initialValue: RulePolicyPresentation.nameWithoutLeadingEmoji(group.name))
-    }
-
-    private var selectedEmoji: String? {
-        let value = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty { return "" }
-        guard value.count == 1,
-              let character = value.first,
-              character.unicodeScalars.contains(where: { $0.properties.isEmoji }) else {
-            return nil
-        }
-        return String(character)
-    }
-
-    private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack(spacing: 12) {
-                        TextField("Emoji", text: $emoji)
-                            .font(.title2)
-                            .multilineTextAlignment(.center)
-                            .frame(width: 58)
-                            .accessibilityLabel("规则 Emoji")
-                        TextField("规则名称", text: $name)
-                            .textInputAutocapitalization(.never)
-                    }
-                } footer: {
-                    Text("Emoji 与名称会同步更新规则绑定和其他策略组引用。")
-                }
-            }
-            .navigationTitle("修改规则名称")
-            .navigationBarTitleDisplayMode(.inline)
-            .confirmDiscardChanges(hasChanges: emoji != RulePolicyPresentation.emoji(for: group.name, kind: group.kind, inferFromName: false) || name != RulePolicyPresentation.nameWithoutLeadingEmoji(group.name), requested: $requestsDiscard)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { requestsDiscard = true }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }
-                        .disabled(selectedEmoji == nil || trimmedName.isEmpty)
-                }
-            }
-            .alert("无法修改规则", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("好") { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
-            }
-        }
-        .presentationDetents([.medium])
-    }
-
-    private func save() {
-        guard let selectedEmoji else { return }
-        do {
-            try model.renameRuleGroup(
-                named: group.name,
-                to: selectedEmoji.isEmpty ? trimmedName : "\(selectedEmoji) \(trimmedName)",
-                for: scheme
-            )
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-}
-
-private struct RuleGroupEditor: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var requestsDiscard = false
-    let scheme: RuleScheme
-    let group: RuleSchemeGroup
-    @State private var selectedReferences: [String]
-    @State private var nodeFilters: [EditableNodeNameFilter]
-    @State private var previewResult: NodeNameFilterPreviewResult?
-    private let initialReferences: [String]
-    private let initialNodeFilters: [EditableNodeNameFilter]
-    @State private var selectedKind: RuleSchemeGroup.Kind
-
-    init(scheme: RuleScheme, group: RuleSchemeGroup) {
-        self.scheme = scheme
-        self.group = group
-        _selectedKind = State(initialValue: group.kind)
-        var seenReferences = Set<String>()
-        let references = group.members.compactMap { member -> String? in
-            guard case .reference(let name) = member else { return nil }
-            return name
-        }.filter { seenReferences.insert($0).inserted }
-        initialReferences = references
-        let existingFilters = EditableNodeNameFilter.rows(for: group)
-        let filters = existingFilters.isEmpty
-            ? [EditableNodeNameFilter(pattern: "", isSourceBound: group.parameters?["tower-source-patterns"] != nil)]
-            : existingFilters
-        initialNodeFilters = filters
-        _selectedReferences = State(initialValue: references)
-        _nodeFilters = State(initialValue: filters)
-    }
-
-    private var editorMode: RuleSchemeGroupEditorMode {
-        scheme.groupEditorMode(for: group)
-    }
-
-    private var referenceOptions: [String] {
-        scheme.routingTargetGroupNames(
-            from: model.customizableRuleGroups(for: scheme),
-            excluding: group.name
-        )
-    }
-
-    private var caseInsensitiveDefault: Bool {
-        group.sourceFormat == nil || group.sourceFormat == "subconverter"
-    }
-
-    private var sourceGroup: RuleSchemeGroup? {
-        let name = model.sourceRuleGroupName(group.name, for: scheme)
-        return scheme.groups.first { $0.name == name }
-    }
-
-    private var previewCandidates: [[String]] {
-        model.enabledNodes.map { node in
-            let presented = model.nodeForPresentation(node)
-            return [NodeRegionResolver.displayName(for: presented), presented.name]
-        }
-    }
-
-    private var enabledPatterns: [String] { nodeFilters.filter(\.isEnabled).map(\.pattern) }
-
-    private var previewInput: NodeNameFilterPreviewInput {
-        let scope: NodeNameFilterPreviewInput.SourceScope? = selectedKind == group.kind ? .init(
-            group: group, nodes: model.enabledNodes.map { model.nodeForPresentation($0) },
-            sourceURLHashes: Dictionary(model.subscriptions.filter(\.isEnabled).map {
-                ($0.id, RuleSchemeParser.sourceURLHash($0.urlString))
-            }, uniquingKeysWith: { first, _ in first }),
-            boundPatterns: Set(nodeFilters.filter { $0.isEnabled && $0.isSourceBound }.map(\.pattern))) : nil
-        return .init(patterns: enabledPatterns, candidates: previewCandidates,
-                     insensitive: caseInsensitiveDefault, sourceScope: scope)
-    }
-
-    private var saveIsDisabled: Bool {
-        switch editorMode {
-        case .routingTargets: selectedReferences.isEmpty
-        case .nodePatternsOnly: enabledPatterns.isEmpty || previewResult?.input != previewInput || previewResult?.error != nil
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Picker("策略类型", selection: $selectedKind) {
-                        ForEach([RuleSchemeGroup.Kind.select, .urlTest, .fallback, .loadBalance, .smart, .conditional, .relay, .unsupported], id: \.self) { kind in
-                            if kind == group.kind || [.select, .urlTest, .fallback].contains(kind) {
-                                Text(kind.displayTitle).tag(kind)
-                            }
-                        }
-                    }
-                } footer: {
-                    if selectedKind != group.kind {
-                        Text("更改策略类型会改变选路行为，并清除原类型专用参数。")
-                    }
-                }
-                switch editorMode {
-                case .routingTargets:
-                    OrderedPolicyCandidateSections(
-                        selected: $selectedReferences,
-                        options: referenceOptions,
-                        scheme: scheme
-                    )
-
-                case .nodePatternsOnly:
-                    Section {
-                        // Existing expressions keep their independent source scope.
-                        // They share one editing section; adding another filter is
-                        // unnecessary because keywords already match any term.
-                        ForEach(nodeFilters) { filter in
-                            NodeNameFilterFields(pattern: Binding(
-                                get: { nodeFilters.first { $0.id == filter.id }?.pattern ?? filter.pattern },
-                                set: { value in
-                                    if let index = nodeFilters.firstIndex(where: { $0.id == filter.id }) {
-                                        nodeFilters[index].pattern = value
-                                    }
-                                }
-                            ), caseInsensitiveDefault: caseInsensitiveDefault)
-                        }
-                    } header: {
-                        Text("节点名称匹配")
-                    }
-                    NodeNameFilterPreview(input: previewInput, result: previewResult)
-                    if let sourceGroup {
-                        Section {
-                            Button("恢复方案默认筛选") {
-                                nodeFilters = EditableNodeNameFilter.rows(for: sourceGroup)
-                            }
-                        }
-                    }
-                }
-            }
-            .task(id: previewInput) {
-                guard editorMode == .nodePatternsOnly else { return }
-                let input = previewInput
-                do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-                let result = await input.evaluate()
-                guard !Task.isCancelled, previewInput == input else { return }
-                previewResult = result
-            }
-            .navigationTitle(RulePolicyPresentation.nameWithoutLeadingEmoji(group.name))
-            .navigationBarTitleDisplayMode(.inline)
-            .confirmDiscardChanges(hasChanges: selectedReferences != initialReferences || nodeFilters != initialNodeFilters || selectedKind != group.kind, requested: $requestsDiscard)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { requestsDiscard = true }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }
-                        .accessibilityIdentifier("node-filter-group-save")
-                        .disabled(saveIsDisabled)
-                }
-            }
-        }
-    }
-
-    private func save() {
-        let referenceMembers = selectedReferences.map(RuleSchemeGroupMember.reference)
-        let patternMembers = nodeFilters.filter(\.isEnabled).map { RuleSchemeGroupMember.nodePattern($0.pattern) }
-        let members: [RuleSchemeGroupMember]
-        switch editorMode {
-        case .routingTargets:
-            members = referenceMembers + (group.kind == .select ? [] : group.members.filter { if case .nodePattern = $0 { return true }; return false })
-        case .nodePatternsOnly:
-            members = patternMembers + (group.kind == .smart ? [] : group.members.filter { if case .reference = $0 { return true }; return false })
-        }
-        model.updateRuleGroup(
-            RuleSchemeGroup(
-                name: group.name,
-                kind: selectedKind,
-                members: members,
-                testURLString: group.testURLString,
-                interval: group.interval,
-                tolerance: group.tolerance,
-                algorithm: group.algorithm,
-                sourceType: group.sourceType,
-                sourceFormat: group.sourceFormat,
-                parameters: group.parameters
-            ),
-            for: scheme,
-            sourceNodePatterns: editorMode == .nodePatternsOnly && group.parameters?["tower-source-patterns"] != nil
-                ? nodeFilters.filter { $0.isEnabled && $0.isSourceBound }.map(\.pattern) : nil
-        )
-        dismiss()
-    }
-}
-
 /// Policy candidates are intentionally ordered: clients use the first member
 /// as the initial/default policy, while still exposing every later member for
 /// manual switching after import.
-private struct OrderedPolicyCandidateSections: View {
+struct OrderedPolicyCandidateSections: View {
+    @Environment(AppModel.self) private var model
     @Binding var selected: [String]
     let options: [String]
     let scheme: RuleScheme
+    @State private var showsAddCandidate = false
 
     private var available: [String] {
         options.filter { !selected.contains($0) }
@@ -2020,43 +1808,66 @@ private struct OrderedPolicyCandidateSections: View {
             }
             .onMove { selected.move(fromOffsets: $0, toOffset: $1) }
             .onDelete { selected.remove(atOffsets: $0) }
-        } header: {
-            HStack {
-                Text("候选策略")
-                Spacer()
-                EditButton()
-            }
-        } footer: {
-            Text("第一项是默认策略。可拖动排序；导入客户端后仍可手动切换。")
-        }
 
-        Section("可添加策略") {
-            ForEach(available, id: \.self) { policy in
-                Button {
-                    selected.append(policy)
-                } label: {
-                    HStack(spacing: 12) {
-                        policyEmoji(policy)
-                        Text(policyTitle(policy))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "plus.circle")
-                            .font(.title3)
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(SelectionIndicatorButtonStyle())
-            }
-            NavigationLink {
-                CustomNodeFilterCreator(scheme: scheme) { name in
-                    if !selected.contains(name) { selected.append(name) }
-                }
+            // One row, not a second list of every region: the group page
+            // keeps its added sites and source rules within reach. A sheet,
+            // not a Menu: in an always-editing list a row Menu never opens.
+            Button {
+                showsAddCandidate = true
             } label: {
-                Label("自定义节点筛选", systemImage: "plus.circle")
-                    .foregroundStyle(Color.accentColor)
+                Label("添加候选策略", systemImage: "plus.circle.fill")
             }
-            .accessibilityIdentifier("custom-node-filter-create")
+            .moveDisabled(true)
+            .deleteDisabled(true)
+            .accessibilityIdentifier("policy-candidate-add")
+            .sheet(isPresented: $showsAddCandidate) {
+                NavigationStack {
+                    List {
+                        Section {
+                            ForEach(available, id: \.self) { policy in
+                                Button {
+                                    selected.append(policy)
+                                    showsAddCandidate = false
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        policyEmoji(policy)
+                                        Text(policyTitle(policy))
+                                            .foregroundStyle(.primary)
+                                        Spacer()
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(SelectionIndicatorButtonStyle())
+                            }
+                        }
+                        Section {
+                            NavigationLink {
+                                CustomNodeFilterCreator(scheme: scheme) { name in
+                                    if !selected.contains(name) { selected.append(name) }
+                                    showsAddCandidate = false
+                                }
+                            } label: {
+                                Label("自定义节点筛选", systemImage: "line.3.horizontal.decrease.circle")
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            .accessibilityIdentifier("custom-node-filter-create")
+                        }
+                    }
+                    .navigationTitle("添加候选策略")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { showsAddCandidate = false }
+                        }
+                    }
+                }
+                .environment(model)
+                .presentationDetents([.medium, .large])
+            }
+        } header: {
+            Text("候选策略")
+        } footer: {
+            Text("第一项是默认策略，按住右侧把手拖动排序；导入客户端后仍可手动切换。")
         }
     }
 
@@ -2233,6 +2044,7 @@ private struct CatalogRuleRouteEditor: View {
                     scheme: scheme
                 )
             }
+            .environment(\.editMode, .constant(.active))
             .navigationTitle("规则流向")
             .navigationBarTitleDisplayMode(.inline)
             .confirmDiscardChanges(hasChanges: selectedReferences != initialReferences, requested: $requestsDiscard)

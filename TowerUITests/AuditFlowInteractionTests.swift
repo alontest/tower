@@ -333,6 +333,31 @@ final class AuditFlowInteractionTests: XCTestCase {
         measureScrolling(app)
     }
 
+    /// Opening and collapsing a region's list must not move the map card.
+    /// The list's heading used to be the first row of a lazy stack, and the
+    /// page's ScrollView shifted 4 pt when it appeared, then snapped back on
+    /// collapse (since 1.0.24, when the home card stopped scrolling the page).
+    func testMapCardStaysStillWhileRegionListOpensAndCollapses() {
+        let app = launchPerformanceFixture()
+        let card = app.buttons["overview-nodes"]
+        let japan = app.buttons["日本"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        XCTAssertTrue(japan.waitForExistence(timeout: 5))
+        let resting = card.frame.minY
+        japan.tap()
+        let collapse = app.buttons["收起 日本 的节点"]
+        // The first map tap may zoom a cluster before selecting the country.
+        if !collapse.waitForExistence(timeout: 2) { japan.tap() }
+        XCTAssertTrue(collapse.waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(card.frame.minY, resting, accuracy: 0.5, "Opening the list must not move the card")
+        japan.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: collapse)
+        waitForExpectations(timeout: 3)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(card.frame.minY, resting, accuracy: 0.5, "Collapsing the list must not move the card")
+    }
+
     func testMapRegionCollapseKeepsSubscriptionTrafficAligned() {
         let app = launchPerformanceFixture()
         let japan = app.buttons["日本"]

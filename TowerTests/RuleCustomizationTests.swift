@@ -1176,7 +1176,7 @@ final class RuleCustomizationTests: XCTestCase {
         XCTAssertNil(reloaded.ruleSchemeCustomizations[scheme.id]?.rulePriorityOrder)
         XCTAssertEqual(reloaded.ruleSchemeCustomizations[scheme.id]?.groupOrder, ["海外媒体", "AI 服务"])
         XCTAssertEqual(reloaded.customizableScheme(for: scheme).rulesets, scheme.rulesets)
-        XCTAssertEqual(reloaded.toast?.text, String(localized: "规则匹配顺序已恢复为方案原始顺序，拖动排序现在只影响显示。"))
+        XCTAssertEqual(reloaded.toast?.text, String(localized: "规则匹配顺序已恢复为方案原始顺序。"))
         XCTAssertNil(AppModel(persistence: store, arguments: []).toast, "只提示一次")
     }
 
