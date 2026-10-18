@@ -23,12 +23,24 @@ sing-box source-format v2 rule set. CIDRs may have no modifier or exactly one
 no-resolve modifier; any other modifier leaves the complete IP family inline.
 Malformed source types also remain inline instead of being partially removed.
 The temporary source JSON and decompiled JSON are used only for semantic
-round-trip verification and are not published.
+round-trip verification and are not published. Each *_singbox_domain.srs holds
+only the DOMAIN, DOMAIN-SUFFIX and DOMAIN-KEYWORD part of the same SRS, for
+sing-box DNS rules, which must decide on the queried name alone.
 
-The artifacts are hosted for compatible Clash/Stash and sing-box clients but
-are not bundled inside the Tower app. Source and artifact SHA-256 digests and
+The *_loon.list, *_quanx.list and *_egern.yaml files are the same rules in the
+remote rule-list format of Loon, Quantumult X and Egern, written the way Tower
+writes each rule into those profiles. A rule type is converted only if every
+one of its lines is TYPE,value or an IP rule with exactly no-resolve; any other
+line keeps the whole type inline. Quantumult X lines name the placeholder
+policy "proxy", which the profile's force-policy replaces. Tower_GEOIP_CN_*.list
+hold the configs' own final GEOIP,CN rule and Tower_catch_all_quanx.list
+Tower's Quantumult X DNS protection rule, so that Loon and Quantumult X, which
+match local rules before any remote list, keep the original order.
+
+The artifacts are hosted for compatible Clash/Stash, sing-box, Loon,
+Quantumult X and Egern clients but are not bundled inside the Tower app. Source and artifact SHA-256 digests and
 converted/residual rule counts are recorded in
 Tower/Resources/ACL4SSR/ACL4SSR_manifest.json.
 
-These derived MRS and SRS rule sets remain under CC BY-SA 4.0 and are not
+These derived rule sets remain under CC BY-SA 4.0 and are not
 covered by the MIT license that applies to Tower's source code.
