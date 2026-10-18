@@ -417,6 +417,39 @@ enum ProxyIconDescriptor: Equatable, Sendable {
     }
 }
 
+/// Keeps the spelling of a protocol this build does not know. A newer build
+/// can write nodes of a protocol added later, to iCloud or before a downgrade;
+/// here they read as `.unknown` (listed, never exported) and are written back
+/// unchanged, so a sync from this device does not break the newer one's node.
+@propertyWrapper
+struct ProxyKindStorage: Codable, Hashable {
+    private var kind: ProxyKind
+    private var unrecognizedRawValue: String?
+
+    init(wrappedValue: ProxyKind) {
+        kind = wrappedValue
+    }
+
+    var wrappedValue: ProxyKind {
+        get { kind }
+        set {
+            kind = newValue
+            unrecognizedRawValue = nil
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        kind = ProxyKind(rawValue: rawValue) ?? .unknown
+        unrecognizedRawValue = ProxyKind(rawValue: rawValue) == nil ? rawValue : nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(unrecognizedRawValue ?? kind.rawValue)
+    }
+}
+
 enum ProxyKind: String, Codable, CaseIterable, Identifiable {
     case shadowsocks = "ss"
     case shadowsocksR = "ssr"
@@ -439,6 +472,13 @@ enum ProxyKind: String, Codable, CaseIterable, Identifiable {
     /// AdGuard's TrustTunnel: HTTP/2 over TLS, or HTTP/3 with `quic`.
     case trustTunnel = "trusttunnel"
     case unknown
+
+    /// A protocol added by a newer build must not make the whole snapshot
+    /// unreadable here; `ProxyNode` keeps its spelling (`ProxyKindStorage`).
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = ProxyKind(rawValue: rawValue) ?? .unknown
+    }
 
     var id: String { rawValue }
 
@@ -556,7 +596,7 @@ struct MASQUEOptions: Codable, Hashable {
 struct ProxyNode: Identifiable, Codable, Hashable {
     let id: UUID
     var sourceID: UUID?
-    var kind: ProxyKind
+    @ProxyKindStorage var kind: ProxyKind
     var name: String
     var server: String
     var port: Int
@@ -1260,6 +1300,13 @@ struct RulePreset: Identifiable, Codable, Hashable {
 }
 
 enum ClientTarget: String, CaseIterable, Identifiable, Codable {
+    /// Only the selected client is stored as a target; a client added by a
+    /// newer build falls back to the default instead of failing the snapshot.
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = ClientTarget(rawValue: rawValue) ?? .surge
+    }
+
     case surge
     case surgeMac = "surge-mac"
     case clash

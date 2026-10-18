@@ -255,6 +255,11 @@ final class AppModel {
     private static let cloudFailureBackoff: TimeInterval = 600
     @ObservationIgnored private var lastCloudSyncFailureAt: Date?
     @ObservationIgnored private var compactedLocalBackups = false
+    /// `state.json` exists but could not even be read at launch: protected
+    /// data is unavailable before first unlock, and iOS can prewarm Tower
+    /// then. Until it is read or kept aside, nothing may replace it, and the
+    /// empty state must not sync to iCloud as if everything had been deleted.
+    @ObservationIgnored private var launchSnapshotUnread = false
     /// Why and how each sync ran, never what was synced: no names, links or
     /// credentials. Visible in Console and in Instruments' os_log table.
     private static let cloudLog = Logger(subsystem: "com.jzb.tower", category: "CloudSync")
@@ -626,8 +631,8 @@ final class AppModel {
             nodes = demo.nodes
             selectedPresetID = demo.selectedPresetID
             selectedTarget = demo.selectedTarget
-        } else if let snapshot = try? self.persistence.load() {
-            apply(snapshot)
+        } else {
+            loadLaunchSnapshot()
         }
         // Nothing has been built from rules yet, so the caches follow these.
         recordRuleInputs()
@@ -3898,6 +3903,32 @@ final class AppModel {
     /// Merge both devices against the last shared baseline, preserving conflicts.
     /// Launch and scene activation can arrive sequentially. Claim the foreground
     /// session before awaiting; reset only on background, not transient inactivity.
+    /// Reads `state.json`, at launch or once it becomes readable.
+    private func loadLaunchSnapshot() {
+        do {
+            if let snapshot = try persistence.load() { apply(snapshot) }
+            launchSnapshotUnread = false
+        } catch {
+            do {
+                // Readable but not decodable here: keep it before starting
+                // empty, and drop the iCloud baseline so the empty state
+                // merges like a new device's instead of deleting everything.
+                try persistence.preserveUnreadableSnapshot()
+                try? persistence.clearCloudBaseline()
+                launchSnapshotUnread = false
+            } catch {
+                launchSnapshotUnread = true
+            }
+        }
+    }
+
+    /// Retries a launch that could not read `state.json`; called on becoming
+    /// active, before any foreground sync.
+    func loadLaunchSnapshotIfUnread() {
+        guard launchSnapshotUnread, !isDemoMode else { return }
+        loadLaunchSnapshot()
+    }
+
     func performForegroundOpenWork() async {
         guard !performedForegroundOpenWork else { return }
         performedForegroundOpenWork = true
@@ -3926,7 +3957,7 @@ final class AppModel {
     }
 
     func synchronizeWithCloud(showResult: Bool = false) async {
-        guard iCloudSyncEnabled, !isDemoMode, !isCloudSyncing else { return }
+        guard iCloudSyncEnabled, !isDemoMode, !isCloudSyncing, !launchSnapshotUnread else { return }
         let generation = cloudSyncGeneration
         var synchronizedEditAt = lastLocalEditAt
         var needsAnotherSync = false
@@ -4055,7 +4086,7 @@ final class AppModel {
     /// Uploads after edits settle, so a burst of changes costs one write.
     private func scheduleCloudUpload(_ snapshot: AppSnapshot) {
         lastLocalEditAt = snapshot.updatedAt
-        guard iCloudSyncEnabled, !isCloudSyncing else { return }
+        guard iCloudSyncEnabled, !isCloudSyncing, !launchSnapshotUnread else { return }
         cloudUploadTask?.cancel()
         cloudUploadTask = Task { [weak self] in
             try? await Task.sleep(for: Self.cloudUploadDelay)
@@ -4549,6 +4580,7 @@ final class AppModel {
     }
 
     private func write(_ snapshot: AppSnapshot) {
+        guard !launchSnapshotUnread else { return }
         do {
             try persistence.save(snapshot)
         } catch {

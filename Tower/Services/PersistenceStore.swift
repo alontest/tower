@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct PersistenceStore {
@@ -78,6 +79,19 @@ struct PersistenceStore {
         _ = try recoveryCopies()
     }
 
+    /// Keeps a `state.json` this build cannot decode (written by a newer
+    /// build, or damaged) before the app starts empty and its next save
+    /// replaces the file. It sits with the recovery copies, named by content
+    /// so relaunching adds nothing, and is listed for restore once a build
+    /// that reads it is installed. Throws when the file cannot be read.
+    func preserveUnreadableSnapshot() throws {
+        let data = try Data(contentsOf: fileURL)
+        let digest = SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let url = backupDirectory.appendingPathComponent("unreadable-\(digest).json")
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        try PersistenceStore(fileURL: url).write(data)
+    }
+
     /// Reads a plain (older) or compressed backup.
     private static func loadBackup(at url: URL) throws -> AppSnapshot? {
         var data = try Data(contentsOf: url)
@@ -90,8 +104,10 @@ struct PersistenceStore {
         guard FileManager.default.fileExists(atPath: backupDirectory.path) else { return [] }
         let copies = try FileManager.default.contentsOfDirectory(at: backupDirectory, includingPropertiesForKeys: nil)
             .filter { ["json", "lzfse"].contains($0.pathExtension) }
+            // A copy this build cannot decode stays on disk, out of the list
+            // and out of pruning, instead of hiding every other copy.
             .compactMap { url in
-                try Self.loadBackup(at: url).map { CloudRecoveryCopy(id: "local-" + url.lastPathComponent, snapshot: $0) }
+                (try? Self.loadBackup(at: url)).map { CloudRecoveryCopy(id: "local-" + url.lastPathComponent, snapshot: $0) }
             }
             .sorted {
                 let left = $0.snapshot.updatedAt ?? .distantPast, right = $1.snapshot.updatedAt ?? .distantPast

@@ -34,6 +34,7 @@ struct TowerApp: App {
                 // other device only ever saw changes if someone opened
                 // Settings and tapped a button, which is not sync.
                 .task(id: hasSeenWelcome) {
+                    model.loadLaunchSnapshotIfUnread()
                     guard hasSeenWelcome else { return }
                     await model.performForegroundOpenWork()
                 }
@@ -48,6 +49,7 @@ struct TowerApp: App {
                         model.lanSharingWillLeaveForeground()
                         return
                     }
+                    model.loadLaunchSnapshotIfUnread()
                     model.lanSharingDidBecomeActive()
                     guard hasSeenWelcome else { return }
                     Task {
