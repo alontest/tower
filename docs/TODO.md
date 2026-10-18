@@ -1,5 +1,16 @@
 # 待办与待验证
 
+## 规则集扩展（2026-10-18，未发布）
+
+- [x] 2026-10-18 产物提交 `9da4e71` 已推送，清单已绑定并通过 `--verify-published`（207 个）。
+- [ ] App 代码与清单的第二个提交（等用户同意再提交 / 推送）。
+- [x] 2026-10-18 真机：Loon、Quantumult X、Egern 下载并命中塔台发布的列表；QuanX「自定义策略」顺序正常；规则分流模式下 telegram.org、广告域名、baidu.com、列表外域名分别命中电报信息、全球拦截、全球直连、漏网之鱼，占位策略 `proxy` 已被 `force-policy` 替换。（首次测试全部显示 `proxy`，原因是 QuanX 处在「全部代理」模式；运行模式要长按右下角按钮切换。）
+- [x] 2026-10-18 真机：Surge iOS 的 `[Ruleset]` 和 Stash 的 `type: inline` 规则集加载并命中（「我的规则集」新建无链接规则集测试）。
+- [ ] mihomo 系客户端里 `type: inline` provider 的实际加载与命中（mihomo 1.19.31 `-t` 已通过）。
+- [ ] Hiddify 4.0 真机引用 SRS；sing-box MT 的 DNS 规则引用纯域名 SRS 后，国内外域名的解析服务器与改前一致（本机 sing-box 1.14.2 已能加载全部 61 个规则集）。
+- [x] 2026-10-18 本机实测规则集下载路径：mihomo（按规则）、sing-box MT（`http_client`）、Hiddify（`download_detour`）都经代理；mihomo 的 `proxy:` 已撤回。
+- [ ] 评估把 `tower-geoip-cn`（内置 IP 库展开的约 1.16 万段）也发布成 SRS，需先核对 IP 库许可证。
+
 - [x] 2026-10-01 GitHub 提交前全量复核：正式 Xcode 27.1，1,315 项 XCTest（6 跳过、零失败）及 106 项 Swift Testing 通过；原有实机观感待验证项继续保留。
 
 ## 首页添加及分享面板的共用布局（2026-10-01，未发布）

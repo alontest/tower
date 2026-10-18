@@ -53,7 +53,9 @@ python3 Scripts/update_acl4ssr_rules.py --latest \
 
 同一更新会为每个可转换列表生成一个 sing-box source-format v2 SRS：`DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD` 以及三种 CIDR 别名合并进一个二进制；CIDR 可不带参数或只带一个 `no-resolve`，其他附加参数会让完整 IP 类型族留在内联规则里。清单的 `coveredRuleTypes` 明确记录真正移入 SRS 的源类型，且 `inputRuleCount + residualRuleCount` 必须等于原规则总数。临时 source JSON 只用于编译，SRS 随后立即反编译并做语义等价检查；JSON 源文件和反编译文件都不会托管。
 
-MRS 与 SRS 最后都放到 `Rulesets/ACL4SSR/<提交号>/`，不随 App 打包。必须显式传入自己核验过的 Mihomo 与 sing-box 可执行文件；脚本分别检查 `-v` 和 `version` 输出，不会自动下载，也不会信任 PATH 里的同名命令。
+同一列表的 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD` 部分另编译成 `_singbox_domain.srs`，供 sing-box MT 的 DNS 规则按域名引用。更新器还生成 Loon（`_loon.list`）、Quantumult X（`_quanx.list`，每行写占位策略 `proxy`，由 `force-policy` 替换）和 Egern（`_egern.yaml`）格式的同内容列表，以及 `Tower_GEOIP_CN_loon.list`、`Tower_GEOIP_CN_quanx.list`、`Tower_catch_all_quanx.list` 三个固定内容文件。App 按随包文本独立复算每种格式覆盖的类型和条数，固定内容文件直接比对 SHA-256，任何一项不符就退回内联。
+
+MRS、SRS 与这些列表最后都放到 `Rulesets/ACL4SSR/<提交号>/`，不随 App 打包。必须显式传入自己核验过的 Mihomo 与 sing-box 可执行文件；脚本分别检查 `-v` 和 `version` 输出，不会自动下载，也不会信任 PATH 里的同名命令。
 
 二进制产物与引用它的 App manifest 必须分两个提交发布，避免 commit SHA 自引用：
 
@@ -71,7 +73,7 @@ MRS 与 SRS 最后都放到 `Rulesets/ACL4SSR/<提交号>/`，不随 App 打包�
    ```
 
    生成后 `ACL4SSR_manifest.json` 必须包含 `artifactCommit`】【，】【所有 MRS/SRS URL 都必须含该完整 SHA，不能再含 `/main/`。
-4. 推送引用清单和 App 代码的第二个提交后，全量回读所有远程 MRS/SRS并校验 SHA-256：
+4. 推送引用清单和 App 代码的第二个提交后，全量回读所有远程 MRS、SRS 与 Loon / QuanX / Egern 列表并校验 SHA-256：
 
    ```sh
    python3 Scripts/update_acl4ssr_rules.py --verify-published

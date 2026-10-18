@@ -696,11 +696,16 @@ final class RuleSetGenerationTests: XCTestCase {
             schemes: fixture.repository,
             preferRuleSets: true
         ).content
-        let hiddifyRoute = try XCTUnwrap(try json(hiddifyContent)["route"] as? [String: Any])
-        XCTAssertNil(hiddifyRoute["rule_set"])
+        // Hiddify 4.0 embeds sing-box 1.13: the same SRS, no http_client.
+        let hiddify = try json(hiddifyContent)
+        let hiddifyRoute = try XCTUnwrap(hiddify["route"] as? [String: Any])
+        let hiddifyRuleSets = try XCTUnwrap(hiddifyRoute["rule_set"] as? [[String: Any]])
+        XCTAssertEqual(hiddifyRuleSets.map { $0["url"] as? String }, [srsURL.absoluteString])
+        XCTAssertNil(hiddify["http_clients"])
         XCTAssertTrue((hiddifyRoute["rules"] as? [[String: Any]])?.contains {
-            ($0["domain_suffix"] as? [String]) == ["example.com"]
+            ($0["domain_keyword"] as? [String]) == ["keep-inline"]
         } == true)
+        XCTAssertFalse((hiddifyRoute["rules"] as? [[String: Any]])?.contains { $0["domain_suffix"] != nil } ?? true)
 
         let inlineContent = fixture.generator.generate(
             nodes: [],
@@ -855,25 +860,26 @@ final class RuleSetGenerationTests: XCTestCase {
         XCTAssertTrue(clash.contains("/Rulesets/ACL4SSR/"), clash)
         XCTAssertFalse(clash.contains("/main/Rulesets/ACL4SSR/"), clash)
         XCTAssertTrue(surge.contains("RULE-SET,https://raw.githubusercontent.com/"), surge)
-        // Loon matches every local rule before any remote list, and ACL4SSR
-        // ends with a local GEOIP,CN. Referencing the lists remotely would let
-        // that rule overtake them, so they are written locally, in order.
-        XCTAssertFalse(loon.contains("[Remote Rule]"), loon)
-        let loonRules = try XCTUnwrap(loon.components(separatedBy: "[Rule]\n").last)
-        let geoIP = try XCTUnwrap(loonRules.range(of: "GEOIP,CN,"))
-        let lanRule = try XCTUnwrap(loonRules.range(of: "IP-CIDR,10.0.0.0/8,"))
-        XCTAssertLessThan(lanRule.lowerBound, geoIP.lowerBound)
+        // Loon matches every local rule before any remote list, so ACL4SSR's
+        // final GEOIP,CN is a published list too: everything stays in order.
+        let loonRemote = try XCTUnwrap(loon.components(separatedBy: "[Remote Rule]\n").last)
+        XCTAssertTrue(loonRemote.hasPrefix("https://raw.githubusercontent.com/pengchujin/tower/"), loon)
+        XCTAssertTrue(loonRemote.contains("ACL4SSR_LocalAreaNetwork_loon.list,policy="), loon)
+        let lanList = try XCTUnwrap(loonRemote.range(of: "_LocalAreaNetwork_loon.list"))
+        let geoIPList = try XCTUnwrap(loonRemote.range(of: "Tower_GEOIP_CN_loon.list"))
+        XCTAssertLessThan(lanList.lowerBound, geoIPList.lowerBound)
+        XCTAssertFalse(loon.contains("GEOIP,CN,"), loon)
+        XCTAssertFalse(loon.contains("IP-CIDR,10.0.0.0/8,"), loon)
 
-        // ACL4SSR's IP-only resource uses Clash's trailing `no-resolve`, which
-        // is not valid QuanX filter syntax. It must be normalized locally
-        // instead of being referenced as a broken filter_remote resource.
-        XCTAssertFalse(quanX.contains("ChinaCompanyIp.list, tag="), quanX)
-        XCTAssertTrue(quanX.contains("ip-cidr, 8.128.0.0/10, 🎯 全球直连"), quanX)
-        XCTAssertTrue(quanX.contains("host-suffix, acl4.ssr, "), quanX)
-        XCTAssertTrue(
-            quanX.contains("host-keyword, ., 🐟 漏网之鱼\nfinal, 🐟 漏网之鱼"),
-            quanX
-        )
+        // ACL4SSR's own lists carry Clash's `no-resolve`, which is not QuanX
+        // syntax: QuanX gets Tower's converted copies, never the source URL.
+        XCTAssertFalse(quanX.contains("Clash/ChinaCompanyIp.list, tag="), quanX)
+        XCTAssertTrue(quanX.contains("ACL4SSR_ChinaCompanyIp_quanx.list, tag="), quanX)
+        // The DNS protection catch-all is the last remote list, not a local
+        // rule that would beat every list.
+        let filters = try XCTUnwrap(quanX.components(separatedBy: "[filter_remote]\n").last?.components(separatedBy: "\n\n").first)
+        XCTAssertTrue(filters.hasSuffix("Tower_catch_all_quanx.list, tag=tower-catch-all, force-policy=🐟 漏网之鱼, enabled=true"), filters)
+        XCTAssertTrue(quanX.contains("[filter_local]\nfinal, 🐟 漏网之鱼\n"), quanX)
         XCTAssertFalse(quanX.lowercased().contains("no-resolve"), quanX)
 
         XCTAssertTrue(singBox.contains(#""format" : "binary""#), singBox)
@@ -882,10 +888,13 @@ final class RuleSetGenerationTests: XCTestCase {
         XCTAssertTrue(singBox.contains("https://raw.githubusercontent.com/pengchujin/tower/"), singBox)
         XCTAssertFalse(singBox.contains("/main/Rulesets/ACL4SSR/"), singBox)
 
-        // Hiddify and Egern require their own verified remote formats. SRS is
-        // intentionally enabled only for the standalone sing-box MT target.
-        XCTAssertFalse(hiddify.contains(#""rule_set""#), hiddify)
-        XCTAssertFalse(egern.contains("  - rule_set:"), egern)
+        XCTAssertTrue(singBox.contains("_singbox_domain.srs"), "DNS rules reference the domain half")
+
+        // Hiddify's embedded sing-box 1.13 reads the same SRS; Egern gets
+        // Tower's copies in its own format.
+        XCTAssertTrue(hiddify.contains("_singbox.srs"), hiddify)
+        XCTAssertTrue(egern.contains("  - rule_set:\n      match: \"https://raw.githubusercontent.com/pengchujin/tower/"), egern)
+        XCTAssertTrue(egern.contains("_egern.yaml"), egern)
     }
 
     private func makeFixture(

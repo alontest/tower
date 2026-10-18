@@ -1,5 +1,25 @@
 # 当前交接
 
+## 未发布：「优先使用规则集」扩展到全部能引用规则集的客户端（2026-10-18）
+
+- **起因**：用户要求调研哪些客户端支持规则集，并「对能支持规则集的都做支持」。改前只有 Surge、mihomo 系、Stash、Shadowrocket、Karing、sing-box MT 引用内置规则集；Loon、QuanX、Hiddify、Egern 全部内联。
+- **实测内存**（macOS，sing-box 1.14.2 / mihomo 1.19.31，常驻内存 3 次中位数）：ACL4SSR 全部列表约 1.08 万条时，mihomo 内联 35.4 MB → MRS 31.4 MB，sing-box 内联 58.0 MB → SRS 46.0 MB（按列表拆 32 份 51 MB）；20 万域名 + 2 万 IP 段时，mihomo 120 → 45 MB，sing-box 262 → 54 MB。sing-box `type: inline` 规则集不省内存。远程 SRS 比本地只多约 1.5 MB；`RULE_EXPORT_AUDIT.md` 里「内联 25 MB、SRS 65 MB」的旧数据复现不出来。
+- **第一批（只改 App）**：
+  - 曾给 mihomo 系的 rule-provider 加 `proxy:`（以为不设就直连），本机实测后撤回：不设时 mihomo 按配置自己的规则下载，raw.githubusercontent.com 命中 `DOMAIN-KEYWORD,github` 经「🚀 节点选择」出去；固定 `proxy:` 反而绕开用户选择和自动选择。
+  - Stash 读用户导入的 domain / ipcidr MRS（Stash 3.1.0 起）；CLAUDE.md 第 25 条同步。
+  - Hiddify 4.0（内置 sing-box 1.13.0，已从 App 二进制确认）改用内置 SRS，下载用 `download_detour`（1.13 还没有 `http_client`）。
+  - 「我的规则集」里没有链接的连续规则：Surge 写成 `[Ruleset tower-local-N]`，mihomo 系和 Stash 写成 `type: inline` provider（纯域名用 domain、纯 IP 用 ipcidr，否则 classical）。只收 `TYPE,value`（IP 可带 `no-resolve`）和 ASCII 值；一条规则不成集；分组补充规则仍逐条在最前。mihomo / Stash 的 IP 规则带不带 `no-resolve` 不混在一个集合里（逐条时 mihomo 只保留源写的，Surge 一律加）。最低版本：Surge Mac 5.3.1、mihomo 1.19.1、Stash iOS 3.6 / macOS 4.3。
+- **第二批（需要发布产物）**：更新器为每个内置列表新增 `_loon.list`、`_quanx.list`、`_egern.yaml`、`_singbox_domain.srs`，以及 `Tower_GEOIP_CN_loon.list`、`Tower_GEOIP_CN_quanx.list`、`Tower_catch_all_quanx.list`。
+  - Loon / QuanX 先匹配全部本地规则再匹配远程列表，所以方案结尾的 `GEOIP,CN` 和 QuanX 的 DNS 保护兜底规则也换成远程列表，排在最后；规划器判断「远程列表后面还有没有本地规则」时，忽略目标客户端本来就写不出的规则（例如 Loon 的 `PROCESS-NAME`）。
+  - sing-box MT 的 DNS 规则改为引用纯域名 SRS（DNS 规则只能按查询的域名判断，不能带 IP 集合），不再把 1 万多个域名展开写进 DNS 规则。
+  - App 端对每种格式按随包文本独立复算覆盖类型和条数，固定内容文件直接比对 SHA-256，不符就退回内联。
+  - 全分组方案开启后：Loon 10,440 → 73 行，QuanX 10,443 → 84 行，Egern 31,857 → 321 行，sing-box MT 32,636 → 12,898 行（剩下的是由内置 IP 库展开的 `tower-geoip-cn`，约 1.16 万段）；开关前后跳过的规则提示条数不变。
+- **产物发布**：新增的 130 个文件（99 个 Loon / QuanX / Egern 列表、31 个 `_singbox_domain.srs`）和更新后的 NOTICE 已单独提交为 `9da4e71` 并推送到 `origin/main`（只含 `Rulesets/`，经用户同意）；清单已用该提交重新生成（207 个地址全部固定到 `9da4e71`，原有 MRS/SRS 字节不变），`--verify-published` 全量回读 207 个通过。App 代码和清单尚未提交、未推送。
+- **验证**：发布后全量 1,356 项 XCTest（7 跳过）、106 项 Swift Testing、更新器 23 项、发布脚本测试通过；本地化 1,184/1,184；mihomo 1.19.31 `-t` 和 sing-box 1.14.2 `check`（sing-box MT 与 Hiddify 两份）通过。Surge、Stash、Loon、QuanX、Egern 没有命令行校验器，未实测。
+- **本机下载路径实测**（2026-10-18，本地记录型 HTTP 代理作唯一节点，mihomo 1.19.31 / sing-box 1.14.2）：mihomo 去掉 `proxy:` 后 43 个规则集照样全部经代理；sing-box MT 经 `http_client` detour 下载，因先在本地解析域名，代理收到的是 GitHub IP，61 个规则集复用 1 条连接；Hiddify 配置有无 `download_detour` 都经代理（31 条 / 1 条连接），保留该字段。
+- **真机**：Loon、QuanX、Egern、Surge iOS `[Ruleset]`、Stash 内联规则集已验证；QuanX 测试时注意处于「规则分流」模式（长按右下角按钮切换），「全部代理」下请求记录全显示 `proxy`。
+- 未递增版本；App 代码未推送；剩余验证项见 TODO。
+
 ## 未发布：读不出的 state.json 不再被空状态覆盖，新协议 / 新客户端不再让快照整体解码失败（2026-10-18）
 
 - **问题**：启动时 `try? persistence.load()` 吞掉所有错误，以空状态启动，之后任何一次保存都会覆盖原文件。两种来源：① 新版写的快照被旧版读（降级、旧 Mac 版），或文件损坏；② 首次解锁前预热启动（`AppModel` 在 `TowerApp` 初始化时创建），`.completeFileProtection` 让文件读不出。开着 iCloud 时更糟：本地空状态对着仍可读的基线做三路合并，等于删掉全部内容并上传。另外 `ProxyKind`、`ClientTarget` 用合成解码，只要出现一个不认识的值，整份快照（含 iCloud 版本和恢复备份）都读不出；一份读不出的备份还会让 `recoveryCopies()` 整体抛错、恢复列表变空。

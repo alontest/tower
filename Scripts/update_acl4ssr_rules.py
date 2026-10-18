@@ -76,6 +76,61 @@ class SRSRuleInputs(NamedTuple):
     covered_rule_types: tuple[str, ...]
 
 
+class DialectArtifact(NamedTuple):
+    """A rule list rewritten for one client's own remote rule-set format."""
+
+    content: str
+    input_rule_count: int
+    residual_rule_count: int
+    covered_rule_types: tuple[str, ...]
+
+
+# The rule types each client's remote lists accept, as Tower writes them one
+# by one (ConfigurationGenerator.mappedRule / egernRule), so a remote list
+# never matches more or less than the same rules written into the profile.
+LOON_RULE_TYPES = (
+    "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
+    "GEOIP", "IP-ASN", "USER-AGENT", "URL-REGEX",
+)
+QUANX_RULE_TYPES = {
+    "DOMAIN": "host",
+    "DOMAIN-SUFFIX": "host-suffix",
+    "DOMAIN-KEYWORD": "host-keyword",
+    "DOMAIN-WILDCARD": "host-wildcard",
+    "IP-CIDR": "ip-cidr",
+    "IP-CIDR6": "ip6-cidr",
+    "IP6-CIDR": "ip6-cidr",
+    "GEOIP": "geoip",
+    "IP-ASN": "ip-asn",
+    "USER-AGENT": "user-agent",
+}
+EGERN_RULE_KEYS = {
+    "DOMAIN": "domain_set",
+    "DOMAIN-SUFFIX": "domain_suffix_set",
+    "DOMAIN-KEYWORD": "domain_keyword_set",
+    "DOMAIN-WILDCARD": "domain_wildcard_set",
+    "IP-CIDR": "ip_cidr_set",
+    "IP-CIDR6": "ip_cidr_set",
+    "IP6-CIDR": "ip_cidr_set",
+    "GEOIP": "geoip_set",
+    "IP-ASN": "asn_set",
+    "URL-REGEX": "url_regex_set",
+    "USER-AGENT": "user_agent_set",
+}
+EGERN_KEY_ORDER = (
+    "domain_set", "domain_suffix_set", "domain_keyword_set", "domain_wildcard_set",
+    "ip_cidr_set", "ip_cidr6_set", "geoip_set", "asn_set", "url_regex_set", "user_agent_set",
+)
+IP_RULE_TYPES = frozenset({"IP-CIDR", "IP-CIDR6", "IP6-CIDR", "GEOIP", "IP-ASN"})
+CIDR_RULE_TYPES = frozenset({"IP-CIDR", "IP-CIDR6", "IP6-CIDR"})
+# QuanX's filter resources name a policy on every line; force-policy on the
+# filter_remote line replaces it, so this placeholder is never used.
+QUANX_PLACEHOLDER_POLICY = "proxy"
+# The last local rule of every bundled ACL4SSR config. Loon and Quantumult X
+# match every local rule before any remote list, so it is published too.
+GEOIP_CN_RULE = "GEOIP,CN"
+
+
 def fetch(url: str) -> bytes:
     request = Request(url, headers={"User-Agent": "Tower ACL4SSR snapshot updater"})
     with urlopen(request, timeout=30) as response:
@@ -151,34 +206,43 @@ def verify_published_artifacts(
         ) from error
 
     base = artifact_public_base(artifact_commit)
-    verified = 0
+    artifacts: list[tuple[str, dict[str, object]]] = []
     for source_name, source_metadata in rulesets.items():
-        artifacts: list[tuple[str, dict[str, object]]] = []
         for behavior, metadata in source_metadata.get("mrs", {}).items():
             artifacts.append((mrs_artifact_name(source_name, behavior), metadata))
         if "srs" in source_metadata:
             artifacts.append((srs_artifact_name(source_name), source_metadata["srs"]))
+        if "srsDomain" in source_metadata:
+            artifacts.append((srs_domain_artifact_name(source_name), source_metadata["srsDomain"]))
+        for dialect in DIALECTS:
+            if dialect in source_metadata:
+                artifacts.append((dialect_artifact_name(source_name, dialect), source_metadata[dialect]))
+    for dialect, metadata in manifest.get("inlineRules", {}).get(GEOIP_CN_RULE, {}).items():
+        artifacts.append((INLINE_RULE_ARTIFACTS[dialect][1], metadata))
+    if "quanxCatchAll" in manifest:
+        artifacts.append((QUANX_CATCH_ALL[1], manifest["quanxCatchAll"]))
 
-        for artifact_name, metadata in artifacts:
-            expected_url = f"{base}/{revision}/{artifact_name}"
-            expected_sha256 = metadata.get("sha256")
-            if metadata.get("url") != expected_url:
-                raise SystemExit(f"产物 URL 不是固定 commit 地址：{artifact_name}")
-            if not isinstance(expected_sha256, str) or len(expected_sha256) != 64 or any(
-                character not in "0123456789abcdef" for character in expected_sha256.lower()
-            ):
-                raise SystemExit(f"产物 SHA-256 无效：{artifact_name}")
-            try:
-                payload = fetcher(expected_url)
-            except (HTTPError, URLError, OSError) as error:
-                raise SystemExit(f"远程产物不可访问：{artifact_name}: {error}") from error
-            actual_sha256 = hashlib.sha256(payload).hexdigest()
-            if actual_sha256 != expected_sha256.lower():
-                raise SystemExit(
-                    f"远程产物摘要不一致：{artifact_name}\n"
-                    f"期望 {expected_sha256.lower()}\n实际 {actual_sha256}"
-                )
-            verified += 1
+    verified = 0
+    for artifact_name, metadata in artifacts:
+        expected_url = f"{base}/{revision}/{artifact_name}"
+        expected_sha256 = metadata.get("sha256")
+        if metadata.get("url") != expected_url:
+            raise SystemExit(f"产物 URL 不是固定 commit 地址：{artifact_name}")
+        if not isinstance(expected_sha256, str) or len(expected_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_sha256.lower()
+        ):
+            raise SystemExit(f"产物 SHA-256 无效：{artifact_name}")
+        try:
+            payload = fetcher(expected_url)
+        except (HTTPError, URLError, OSError) as error:
+            raise SystemExit(f"远程产物不可访问：{artifact_name}: {error}") from error
+        actual_sha256 = hashlib.sha256(payload).hexdigest()
+        if actual_sha256 != expected_sha256.lower():
+            raise SystemExit(
+                f"远程产物摘要不一致：{artifact_name}\n"
+                f"期望 {expected_sha256.lower()}\n实际 {actual_sha256}"
+            )
+        verified += 1
 
     if verified == 0:
         raise SystemExit("ACL4SSR 清单中没有可验证的 MRS/SRS 产物")
@@ -583,6 +647,179 @@ def compile_mrs(
     return len(dumped_rules)
 
 
+def _plain_rules(text: str) -> list[list[str]]:
+    rules: list[list[str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        rules.append([field.strip() for field in line.split(",")])
+    return rules
+
+
+def _dialect_rules(
+    text: str,
+    supported_types,
+    *,
+    uniform_no_resolve: bool = False,
+) -> tuple[list[tuple[str, str, bool]], int, int, tuple[str, ...]]:
+    """Source-ordered (type, value, no-resolve) rules of the covered types.
+
+    A type is covered only if every one of its lines is ``TYPE,value`` or an
+    IP rule with exactly ``no-resolve``; one other line keeps the whole type
+    inline. With ``uniform_no_resolve`` the IP family also needs one shared
+    no-resolve state, since the format has one flag for the whole list.
+    """
+    rules = _plain_rules(text)
+    complete: dict[str, bool] = {}
+    for fields in rules:
+        rule_type = fields[0].upper()
+        if rule_type not in supported_types:
+            continue
+        valid = len(fields) >= 2 and bool(fields[1]) and (
+            len(fields) == 2
+            or (len(fields) == 3 and rule_type in IP_RULE_TYPES and fields[2].lower() == "no-resolve")
+        )
+        complete[rule_type] = complete.get(rule_type, True) and valid
+    if uniform_no_resolve:
+        states = {
+            len(fields) == 3 or fields[0].upper() == "GEOIP"
+            for fields in rules
+            if fields[0].upper() in IP_RULE_TYPES and complete.get(fields[0].upper())
+        }
+        if len(states) > 1:
+            for rule_type in IP_RULE_TYPES:
+                if rule_type in complete:
+                    complete[rule_type] = False
+    covered = tuple(rule_type for rule_type, ok in complete.items() if ok)
+    selected = [
+        (fields[0].upper(), fields[1], len(fields) == 3)
+        for fields in rules
+        if complete.get(fields[0].upper())
+    ]
+    return selected, len(selected), len(rules) - len(selected), covered
+
+
+def loon_rule_list(text: str) -> DialectArtifact:
+    selected, count, residual, covered = _dialect_rules(text, LOON_RULE_TYPES)
+    # GEOIP gains no-resolve exactly as RoutingRuleCapabilities.render adds it.
+    lines = [
+        f"{rule_type},{value}" + (",no-resolve" if no_resolve or rule_type == "GEOIP" else "")
+        for rule_type, value, no_resolve in selected
+    ]
+    return DialectArtifact("".join(f"{line}\n" for line in lines), count, residual, covered)
+
+
+def quanx_filter_list(text: str) -> DialectArtifact:
+    selected, count, residual, covered = _dialect_rules(text, QUANX_RULE_TYPES)
+    # Quantumult X has no no-resolve option; Tower drops it there as well.
+    lines = [
+        f"{QUANX_RULE_TYPES[rule_type]}, {value}, {QUANX_PLACEHOLDER_POLICY}"
+        for rule_type, value, _ in selected
+    ]
+    return DialectArtifact("".join(f"{line}\n" for line in lines), count, residual, covered)
+
+
+def egern_rule_set(text: str) -> DialectArtifact:
+    selected, count, residual, covered = _dialect_rules(
+        text, EGERN_RULE_KEYS, uniform_no_resolve=True
+    )
+    groups: dict[str, list[str]] = {}
+    no_resolve = False
+    for rule_type, value, wrote_no_resolve in selected:
+        key = EGERN_RULE_KEYS[rule_type]
+        if rule_type in CIDR_RULE_TYPES and ":" in value:
+            key = "ip_cidr6_set"
+        groups.setdefault(key, []).append(value)
+        if rule_type in IP_RULE_TYPES:
+            no_resolve = no_resolve or wrote_no_resolve or rule_type == "GEOIP"
+    lines: list[str] = []
+    if no_resolve:
+        lines.append("no_resolve: true")
+    for key in EGERN_KEY_ORDER:
+        if key in groups:
+            lines.append(f"{key}:")
+            lines.extend(f"  - {json.dumps(value, ensure_ascii=False)}" for value in groups[key])
+    return DialectArtifact("".join(f"{line}\n" for line in lines), count, residual, covered)
+
+
+DIALECTS = {
+    "loon": (loon_rule_list, "list"),
+    "quanx": (quanx_filter_list, "list"),
+    "egern": (egern_rule_set, "yaml"),
+}
+
+
+def dialect_artifact_name(local_ruleset_name: str, dialect: str) -> str:
+    return f"{local_ruleset_name.removesuffix('.list')}_{dialect}.{DIALECTS[dialect][1]}"
+
+
+def dialect_artifact_metadata(
+    *,
+    revision: str,
+    artifact_path: Path,
+    artifact: DialectArtifact,
+    source_sha256: str,
+    artifact_commit: str | None = None,
+) -> dict[str, object]:
+    return {
+        "url": f"{artifact_public_base(artifact_commit)}/{revision}/{artifact_path.name}",
+        "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+        "sourceSha256": source_sha256,
+        "inputRuleCount": artifact.input_rule_count,
+        "residualRuleCount": artifact.residual_rule_count,
+        "coveredRuleTypes": list(artifact.covered_rule_types),
+    }
+
+
+# Rules Tower writes locally after the remote lists of every bundled config,
+# published so Loon and Quantumult X can keep them in order (local rules win
+# over every remote list there). The QuanX catch-all is Tower's own DNS
+# protection line (ConfigurationGenerator.quanXLocalSchemeRules).
+INLINE_RULE_ARTIFACTS = {
+    "loon": (loon_rule_list(GEOIP_CN_RULE).content, "Tower_GEOIP_CN_loon.list"),
+    "quanx": (quanx_filter_list(GEOIP_CN_RULE).content, "Tower_GEOIP_CN_quanx.list"),
+}
+QUANX_CATCH_ALL = (f"host-keyword, ., {QUANX_PLACEHOLDER_POLICY}\n", "Tower_catch_all_quanx.list")
+
+
+def text_artifact_metadata(
+    *, revision: str, artifact_path: Path, artifact_commit: str | None = None
+) -> dict[str, object]:
+    return {
+        "url": f"{artifact_public_base(artifact_commit)}/{revision}/{artifact_path.name}",
+        "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+    }
+
+
+def srs_domain_inputs(classified: SRSRuleInputs, text: str) -> SRSRuleInputs:
+    """The domain half of an SRS, for sing-box DNS rules.
+
+    DNS rules may only test the queried name before resolving: an address
+    set there would ask a resolver first. The covered domain types are the
+    full SRS's, so DNS and routing agree on every name.
+    """
+    domain_types = ("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD")
+    covered = tuple(rule_type for rule_type in classified.covered_rule_types if rule_type in domain_types)
+    source_rules = tuple(
+        (field, values)
+        for field, values in classified.source_rules
+        if field in ("domain", "domain_suffix", "domain_keyword")
+    )
+    rules = _plain_rules(text)
+    input_rule_count = sum(1 for fields in rules if fields[0].upper() in covered)
+    return SRSRuleInputs(
+        source_rules=source_rules,
+        input_rule_count=input_rule_count,
+        residual_rule_count=len(rules) - input_rule_count,
+        covered_rule_types=covered,
+    )
+
+
+def srs_domain_artifact_name(local_ruleset_name: str) -> str:
+    return f"{local_ruleset_name.removesuffix('.list')}_singbox_domain.srs"
+
+
 def normalized_srs_source(
     source_rules: tuple[tuple[str, tuple[str, ...]], ...],
 ) -> dict[str, object]:
@@ -805,14 +1042,26 @@ sing-box source-format v2 rule set. CIDRs may have no modifier or exactly one
 no-resolve modifier; any other modifier leaves the complete IP family inline.
 Malformed source types also remain inline instead of being partially removed.
 The temporary source JSON and decompiled JSON are used only for semantic
-round-trip verification and are not published.
+round-trip verification and are not published. Each *_singbox_domain.srs holds
+only the DOMAIN, DOMAIN-SUFFIX and DOMAIN-KEYWORD part of the same SRS, for
+sing-box DNS rules, which must decide on the queried name alone.
 
-The artifacts are hosted for compatible Clash/Stash and sing-box clients but
-are not bundled inside the Tower app. Source and artifact SHA-256 digests and
+The *_loon.list, *_quanx.list and *_egern.yaml files are the same rules in the
+remote rule-list format of Loon, Quantumult X and Egern, written the way Tower
+writes each rule into those profiles. A rule type is converted only if every
+one of its lines is TYPE,value or an IP rule with exactly no-resolve; any other
+line keeps the whole type inline. Quantumult X lines name the placeholder
+policy "proxy", which the profile's force-policy replaces. Tower_GEOIP_CN_*.list
+hold the configs' own final GEOIP,CN rule and Tower_catch_all_quanx.list
+Tower's Quantumult X DNS protection rule, so that Loon and Quantumult X, which
+match local rules before any remote list, keep the original order.
+
+The artifacts are hosted for compatible Clash/Stash, sing-box, Loon,
+Quantumult X and Egern clients but are not bundled inside the Tower app. Source and artifact SHA-256 digests and
 converted/residual rule counts are recorded in
 Tower/Resources/ACL4SSR/ACL4SSR_manifest.json.
 
-These derived MRS and SRS rule sets remain under CC BY-SA 4.0 and are not
+These derived rule sets remain under CC BY-SA 4.0 and are not
 covered by the MIT license that applies to Tower's source code.
 """
 
@@ -875,17 +1124,17 @@ License:     CC BY-SA 4.0
 Bundled here: the ACL4SSR_Online, ACL4SSR_Online_Mini and ACL4SSR_Online_Full
 remote configs, plus every .list rule file they reference.
 
-ACL4SSR_manifest.json also records Tower-generated MRS and SRS derivatives for
-the losslessly convertible rules. The binaries live under the repository's
-Rulesets/ directory for compatible Clash/Stash and sing-box clients and are not
-bundled inside the Tower app. Rules without a binary representation stay inline.
+ACL4SSR_manifest.json also records Tower-generated MRS and SRS derivatives and
+Loon, Quantumult X and Egern rule lists for the losslessly convertible rules.
+They live under the repository's Rulesets/ directory for compatible clients, not
+bundled inside the Tower app. Rules without such a representation stay inline.
 
 Modifications: none to the rule contents. Every file carries an "ACL4SSR_"
 prefix because Xcode flattens resources into the bundle root; this keeps their
 origin explicit and avoids future filename collisions. The configs' "master"
 URLs were rewritten to the pinned revision above so the snapshot is reproducible.
 
-Sources, generated MRS/SRS URLs, rule counts and SHA-256 digests:
+Sources, generated rule-set URLs, rule counts and SHA-256 digests:
 ACL4SSR_manifest.json
 Regenerate with: python3 Scripts/update_acl4ssr_rules.py --latest \\
   --mihomo <pinned Mihomo executable> --mihomo-version {MIHOMO_VERSION} \\
@@ -1056,6 +1305,7 @@ def build(
         manifest["artifactCommit"] = artifact_commit
     mrs_artifact_count = 0
     srs_artifact_count = 0
+    text_artifact_count = 0
 
     try:
         for scheme_id, (file_name, display_name, summary) in configs.items():
@@ -1159,7 +1409,58 @@ def build(
                             artifact_commit=artifact_commit,
                         )
                         srs_artifact_count += 1
+
+                        domain_inputs = srs_domain_inputs(classified_srs, body)
+                        if domain_inputs.source_rules:
+                            artifact_name = srs_domain_artifact_name(name)
+                            artifact_path = mrs_staging / artifact_name
+                            compile_srs(
+                                sing_box_path=sing_box_path,
+                                source_rules=domain_inputs.source_rules,
+                                input_path=compiler_inputs / f"{artifact_name}.json",
+                                output_path=artifact_path,
+                            )
+                            ruleset_metadata["srsDomain"] = srs_artifact_metadata(
+                                revision=revision,
+                                artifact_path=artifact_path,
+                                classified=domain_inputs,
+                                source_sha256=source_sha256,
+                                compiler_version=srs_compiler_version,
+                                artifact_commit=artifact_commit,
+                            )
+                            srs_artifact_count += 1
+
+                    for dialect, (convert, _) in DIALECTS.items():
+                        artifact = convert(body)
+                        if not artifact.input_rule_count:
+                            continue
+                        artifact_path = mrs_staging / dialect_artifact_name(name, dialect)
+                        artifact_path.write_text(artifact.content, encoding="utf-8")
+                        ruleset_metadata[dialect] = dialect_artifact_metadata(
+                            revision=revision,
+                            artifact_path=artifact_path,
+                            artifact=artifact,
+                            source_sha256=source_sha256,
+                            artifact_commit=artifact_commit,
+                        )
+                        text_artifact_count += 1
                 manifest["rulesets"][name] = ruleset_metadata
+
+        inline_rules: dict[str, object] = {}
+        for dialect, (content, file_name) in INLINE_RULE_ARTIFACTS.items():
+            artifact_path = mrs_staging / file_name
+            artifact_path.write_text(content, encoding="utf-8")
+            inline_rules[dialect] = text_artifact_metadata(
+                revision=revision, artifact_path=artifact_path, artifact_commit=artifact_commit
+            )
+            text_artifact_count += 1
+        manifest["inlineRules"] = {GEOIP_CN_RULE: inline_rules}
+        catch_all_path = mrs_staging / QUANX_CATCH_ALL[1]
+        catch_all_path.write_text(QUANX_CATCH_ALL[0], encoding="utf-8")
+        manifest["quanxCatchAll"] = text_artifact_metadata(
+            revision=revision, artifact_path=catch_all_path, artifact_commit=artifact_commit
+        )
+        text_artifact_count += 1
 
         (mrs_staging / "NOTICE.txt").write_text(
             artifact_notice_text(
@@ -1199,7 +1500,8 @@ def build(
     print(
         f"\n完成：{len(manifest['configs'])} 份配置，"
         f"{len(manifest['rulesets'])} 个规则文件 -> {destination}\n"
-        f"      {mrs_artifact_count} 个 MRS、{srs_artifact_count} 个 SRS 文件 -> "
+        f"      {mrs_artifact_count} 个 MRS、{srs_artifact_count} 个 SRS、"
+        f"{text_artifact_count} 个 Loon / Quantumult X / Egern 文件 -> "
         f"{mrs_destination / revision}"
     )
 

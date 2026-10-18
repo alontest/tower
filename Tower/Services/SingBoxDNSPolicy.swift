@@ -134,11 +134,12 @@ enum SingBoxDNSPolicy {
             globalDNSTag.map { ["clash_mode": globalMode, "action": "route", "server": $0] }
                 ?? ["clash_mode": globalMode, "action": "reject"]
         ]
-        // Project only domain predicates, in source order, from locally cached
-        // rules. Do not use IP/SRS response filters: they may query the direct
+        // Project only domain predicates, in source order: cached rules, or a
+        // list's domain-only SRS, which tests the queried name and nothing
+        // else. Do not use IP/SRS response filters: they may query the direct
         // resolver before discovering that a domain belongs on the proxy.
         for rule in domainRules {
-            var projected = rule.filter { ["domain", "domain_suffix", "domain_keyword", "domain_regex"].contains($0.key) }
+            var projected = rule.filter { ["domain", "domain_suffix", "domain_keyword", "domain_regex", "rule_set"].contains($0.key) }
             guard !projected.isEmpty else { continue }
             if rule["action"] as? String == "reject" || rule["outbound"] as? String == "REJECT" {
                 projected["action"] = "reject"
@@ -215,7 +216,17 @@ enum SingBoxDNSPolicy {
     /// client is in China. The sing-box manual uses the same 114 DNS range.
     static let chinaClientSubnet = "114.114.114.0/24"
 
+    /// One rule, or a domain-only rule set standing for a whole list.
+    enum DomainSource {
+        case rule(RuleSetEmissionPlanner.InlineRule)
+        case ruleSet(tag: String, policyName: String)
+    }
+
     static func domainRules(from entries: [RuleSetEmissionPlanner.InlineRule]) -> [[String: Any]] {
+        domainRules(from: entries.map(DomainSource.rule))
+    }
+
+    static func domainRules(from sources: [DomainSource]) -> [[String: Any]] {
         let fields = ["DOMAIN": "domain", "DOMAIN-SUFFIX": "domain_suffix", "DOMAIN-KEYWORD": "domain_keyword"]
         var result: [[String: Any]] = []
         var pendingPolicy: String?
@@ -227,7 +238,17 @@ enum SingBoxDNSPolicy {
             result.append(rule)
             pendingFields = [:]
         }
-        for entry in entries {
+        for source in sources {
+            let entry: RuleSetEmissionPlanner.InlineRule
+            switch source {
+            case .ruleSet(let tag, let policyName):
+                flush()
+                pendingPolicy = nil
+                result.append(["rule_set": [tag], "outbound": policyName])
+                continue
+            case .rule(let rule):
+                entry = rule
+            }
             let parts = entry.line.split(separator: ",", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             guard parts.count >= 2, let field = fields[parts[0].uppercased()], !parts[1].isEmpty else { continue }

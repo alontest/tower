@@ -505,6 +505,59 @@ class UpdateACL4SSRRulesTests(unittest.TestCase):
                         srs_metadata["sha256"],
                     )
 
+                    domain_inputs = updater.srs_domain_inputs(classified_srs, source_text)
+                    self.assertEqual("srsDomain" in metadata, bool(domain_inputs.source_rules))
+                    if domain_inputs.source_rules:
+                        domain_metadata = metadata["srsDomain"]
+                        artifact_name = updater.srs_domain_artifact_name(ruleset_name)
+                        expected_artifact_files.add(artifact_name)
+                        self.assertEqual(domain_metadata["url"], f"{artifact_base}/{revision}/{artifact_name}")
+                        self.assertEqual(domain_metadata["coveredRuleTypes"], list(domain_inputs.covered_rule_types))
+                        self.assertEqual(
+                            domain_metadata["inputRuleCount"] + domain_metadata["residualRuleCount"],
+                            metadata["ruleCount"],
+                        )
+                        self.assertEqual(
+                            hashlib.sha256((artifact_directory / artifact_name).read_bytes()).hexdigest(),
+                            domain_metadata["sha256"],
+                        )
+
+                for dialect, (convert, _) in updater.DIALECTS.items():
+                    artifact = convert(source_text)
+                    expects_dialect = bool(is_pinned_source and artifact.input_rule_count)
+                    self.assertEqual(dialect in metadata, expects_dialect, f"{ruleset_name} {dialect}")
+                    if not expects_dialect:
+                        continue
+                    dialect_metadata = metadata[dialect]
+                    artifact_name = updater.dialect_artifact_name(ruleset_name, dialect)
+                    artifact_path = artifact_directory / artifact_name
+                    expected_artifact_files.add(artifact_name)
+                    self.assertEqual(dialect_metadata["url"], f"{artifact_base}/{revision}/{artifact_name}")
+                    self.assertEqual(dialect_metadata["sourceSha256"], source_sha256)
+                    self.assertEqual(dialect_metadata["coveredRuleTypes"], list(artifact.covered_rule_types))
+                    self.assertEqual(
+                        dialect_metadata["inputRuleCount"] + dialect_metadata["residualRuleCount"],
+                        metadata["ruleCount"],
+                    )
+                    # The published file is exactly what the converter writes today.
+                    self.assertEqual(artifact_path.read_text(encoding="utf-8"), artifact.content)
+                    self.assertEqual(
+                        hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                        dialect_metadata["sha256"],
+                    )
+
+        for dialect, (content, artifact_name) in updater.INLINE_RULE_ARTIFACTS.items():
+            artifact_metadata = manifest["inlineRules"][updater.GEOIP_CN_RULE][dialect]
+            expected_artifact_files.add(artifact_name)
+            self.assertEqual(artifact_metadata["url"], f"{artifact_base}/{revision}/{artifact_name}")
+            self.assertEqual((artifact_directory / artifact_name).read_text(encoding="utf-8"), content)
+            self.assertEqual(hashlib.sha256(content.encode()).hexdigest(), artifact_metadata["sha256"])
+        catch_all_content, catch_all_name = updater.QUANX_CATCH_ALL
+        expected_artifact_files.add(catch_all_name)
+        self.assertEqual(manifest["quanxCatchAll"]["url"], f"{artifact_base}/{revision}/{catch_all_name}")
+        self.assertEqual((artifact_directory / catch_all_name).read_text(encoding="utf-8"), catch_all_content)
+        self.assertEqual(hashlib.sha256(catch_all_content.encode()).hexdigest(), manifest["quanxCatchAll"]["sha256"])
+
         self.assertEqual(
             {path.name for path in bundle_directory.iterdir()},
             expected_bundle_files,
@@ -588,6 +641,82 @@ class UpdateACL4SSRRulesTests(unittest.TestCase):
             ("192.0.2.0/24", "198.51.100.0/24"),
         )
         self.assertFalse(classified.ipcidr_complete)
+
+    def test_dialect_lists_write_rules_the_way_the_profile_would(self) -> None:
+        source = """
+        # comment
+        DOMAIN-SUFFIX,example.com
+        DOMAIN,api.example.com
+        DOMAIN-KEYWORD,tracker
+        IP-CIDR,192.0.2.0/24,no-resolve
+        IP-CIDR6,2001:db8::/32,no-resolve
+        USER-AGENT,Example*
+        PROCESS-NAME,Example
+        URL-REGEX,^https?://ad\\.example/
+        """
+        loon = updater.loon_rule_list(source)
+        self.assertEqual(
+            loon.content,
+            "DOMAIN-SUFFIX,example.com\nDOMAIN,api.example.com\nDOMAIN-KEYWORD,tracker\n"
+            "IP-CIDR,192.0.2.0/24,no-resolve\nIP-CIDR6,2001:db8::/32,no-resolve\n"
+            "USER-AGENT,Example*\nURL-REGEX,^https?://ad\\.example/\n",
+        )
+        self.assertEqual((loon.input_rule_count, loon.residual_rule_count), (7, 1))
+        self.assertNotIn("PROCESS-NAME", loon.covered_rule_types)
+
+        quanx = updater.quanx_filter_list(source)
+        self.assertEqual(
+            quanx.content,
+            "host-suffix, example.com, proxy\nhost, api.example.com, proxy\nhost-keyword, tracker, proxy\n"
+            "ip-cidr, 192.0.2.0/24, proxy\nip6-cidr, 2001:db8::/32, proxy\nuser-agent, Example*, proxy\n",
+        )
+        self.assertEqual((quanx.input_rule_count, quanx.residual_rule_count), (6, 2))
+
+        egern = updater.egern_rule_set(source)
+        self.assertEqual(
+            egern.content,
+            'no_resolve: true\ndomain_set:\n  - "api.example.com"\ndomain_suffix_set:\n  - "example.com"\n'
+            'domain_keyword_set:\n  - "tracker"\nip_cidr_set:\n  - "192.0.2.0/24"\n'
+            'ip_cidr6_set:\n  - "2001:db8::/32"\nurl_regex_set:\n  - "^https?://ad\\\\.example/"\n'
+            'user_agent_set:\n  - "Example*"\n',
+        )
+        self.assertEqual((egern.input_rule_count, egern.residual_rule_count), (7, 1))
+
+    def test_dialect_lists_fail_closed_per_type(self) -> None:
+        source = """
+        DOMAIN-SUFFIX,example.com
+        DOMAIN-SUFFIX,example.org,extended-matching
+        DOMAIN,api.example.com
+        IP-CIDR,192.0.2.0/24,no-resolve
+        IP-CIDR,198.51.100.0/24
+        """
+        for convert in (updater.loon_rule_list, updater.quanx_filter_list):
+            artifact = convert(source)
+            # One suffix with an option the format cannot carry keeps both inline.
+            self.assertEqual(set(artifact.covered_rule_types), {"DOMAIN", "IP-CIDR"})
+            self.assertNotIn("example.org", artifact.content)
+            self.assertNotIn("suffix", artifact.content.lower())
+            self.assertEqual(artifact.residual_rule_count, 2)
+        # Egern has one no_resolve flag for the whole list: a mixed IP family stays inline.
+        egern = updater.egern_rule_set(source)
+        self.assertEqual(egern.covered_rule_types, ("DOMAIN",))
+        self.assertEqual(egern.content, 'domain_set:\n  - "api.example.com"\n')
+        self.assertEqual(updater.loon_rule_list("GEOIP,CN\n").content, "GEOIP,CN,no-resolve\n")
+        self.assertEqual(updater.INLINE_RULE_ARTIFACTS["loon"][0], "GEOIP,CN,no-resolve\n")
+        self.assertEqual(updater.INLINE_RULE_ARTIFACTS["quanx"][0], "geoip, CN, proxy\n")
+
+    def test_dns_domain_srs_keeps_only_the_names(self) -> None:
+        source = """
+        DOMAIN,Exact.Example
+        DOMAIN-SUFFIX,example.com
+        IP-CIDR,192.0.2.0/24,no-resolve
+        PROCESS-NAME,Example
+        """
+        full = updater.classify_srs_rules(source)
+        domain = updater.srs_domain_inputs(full, source)
+        self.assertEqual([field for field, _ in domain.source_rules], ["domain", "domain_suffix"])
+        self.assertEqual(domain.covered_rule_types, ("DOMAIN", "DOMAIN-SUFFIX"))
+        self.assertEqual((domain.input_rule_count, domain.residual_rule_count), (2, 2))
 
     def test_srs_classification_combines_supported_types_and_keeps_residuals(self) -> None:
         classified = updater.classify_srs_rules(

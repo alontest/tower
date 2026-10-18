@@ -28,12 +28,17 @@ final class RuleExportAuditFixTests: XCTestCase {
         ConfigurationGenerator().generate(nodes: [node], scheme: scheme, target: target, schemes: schemes, preferRuleSets: preferRuleSets)
     }
 
-    private func repository(_ lists: [URL: String]) throws -> RuleSchemeRepository {
+    /// No published local rules unless a test asks: the bundled manifest's
+    /// GEOIP,CN list would otherwise change what these cases are about.
+    private func repository(
+        _ lists: [URL: String],
+        publishedLocalRules: RuleSchemeRepository.PublishedLocalRules = .init()
+    ) throws -> RuleSchemeRepository {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         let store = RuleDownloadStore(folderURL: folder)
         for (url, content) in lists { try store.store(content, for: url) }
-        return RuleSchemeRepository(downloadStore: store)
+        return RuleSchemeRepository(downloadStore: store, publishedLocalRules: publishedLocalRules)
     }
 
     // MARK: - Loon filters
@@ -293,6 +298,41 @@ final class RuleExportAuditFixTests: XCTestCase {
         let after = try surge(["GEOIP,CN,DIRECT", "RULE-SET,\(url.absoluteString),REJECT", "FINAL,OpenAI"])
         let loon = output(after, .loon, schemes: repository, preferRuleSets: true).content
         XCTAssertTrue(loon.contains("[Remote Rule]\n\(url.absoluteString),policy=REJECT"), loon)
+    }
+
+    func testPublishedGeoIPListKeepsLoonAndQuanXListsRemoteAndInOrder() throws {
+        let url = URL(string: "https://rules.example.com/ads.list")!
+        let loonGeoIP = URL(string: "https://rules.example.com/geoip-cn-loon.list")!
+        let quanXGeoIP = URL(string: "https://rules.example.com/geoip-cn-quanx.list")!
+        let catchAll = URL(string: "https://rules.example.com/catch-all.list")!
+        let repository = try repository(
+            [url: "DOMAIN-SUFFIX,ads.example\nIP-CIDR,203.0.113.0/24,no-resolve"],
+            publishedLocalRules: .init(inlineRules: ["GEOIP,CN": [.loon: loonGeoIP, .quanx: quanXGeoIP]], quanXCatchAll: catchAll)
+        )
+        let scheme = try surge(["RULE-SET,\(url.absoluteString),REJECT", "GEOIP,CN,DIRECT", "FINAL,OpenAI"])
+
+        let loon = output(scheme, .loon, schemes: repository, preferRuleSets: true).content
+        let remote = try XCTUnwrap(loon.components(separatedBy: "[Remote Rule]\n").last)
+        XCTAssertTrue(remote.hasPrefix("\(url.absoluteString),policy=REJECT,"), loon)
+        XCTAssertTrue(remote.contains("\n\(loonGeoIP.absoluteString),policy=DIRECT,"), loon)
+        XCTAssertFalse(loon.contains("GEOIP,CN,"), "no local GEOIP left to overtake the list")
+
+        // Quantumult X references only lists already in its own format.
+        let quanXRepository = try self.repository(
+            [url: "host-suffix, ads.example, reject"],
+            publishedLocalRules: .init(inlineRules: ["GEOIP,CN": [.loon: loonGeoIP, .quanx: quanXGeoIP]], quanXCatchAll: catchAll)
+        )
+        let quanX = output(scheme, .quanx, schemes: quanXRepository, preferRuleSets: true).content
+        let filters = try XCTUnwrap(quanX.components(separatedBy: "[filter_remote]\n").last?.components(separatedBy: "\n\n").first)
+        XCTAssertEqual(filters.components(separatedBy: "\n").map { $0.components(separatedBy: ",").first ?? "" },
+                       [url.absoluteString, quanXGeoIP.absoluteString, catchAll.absoluteString], quanX)
+        XCTAssertTrue(filters.hasSuffix("force-policy=OpenAI, enabled=true"), filters)
+        XCTAssertFalse(quanX.contains("host-keyword, ., "), "the catch-all is not also local")
+        XCTAssertFalse(quanX.contains("geoip, CN"))
+
+        // Without the published lists nothing changes.
+        let local = output(scheme, .quanx, schemes: try self.repository([url: "host-suffix, ads.example, reject"]), preferRuleSets: true).content
+        XCTAssertFalse(local.contains(catchAll.absoluteString))
     }
 
     func testQuanXCatchAllDoesNotShadowRemoteLists() throws {

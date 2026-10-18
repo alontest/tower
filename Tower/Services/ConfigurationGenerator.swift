@@ -170,7 +170,10 @@ struct ConfigurationGenerator {
             return replacement
         }
         scheme.rulesets = scheme.rulesets.map {
-            RuleSchemeRuleset(groupName: substituted($0.groupName), resource: $0.resource, options: $0.options, provider: $0.provider)
+            var ruleset = RuleSchemeRuleset(groupName: substituted($0.groupName), resource: $0.resource, options: $0.options, provider: $0.provider)
+            // The planner groups rules of one library rule set by origin.
+            ruleset.origin = $0.origin
+            return ruleset
         }
         scheme.groups = scheme.groups.map { group in
             RuleSchemeGroup(name: group.name, kind: group.kind,
@@ -303,7 +306,8 @@ struct ConfigurationGenerator {
         let rulePlan = RuleSetEmissionPlanner(repository: schemes).plan(
             for: scheme,
             target: target,
-            preferRuleSets: preferRuleSets
+            preferRuleSets: preferRuleSets,
+            isExpressible: { mappedRule($0, policyName: "DIRECT", target: target) != nil }
         )
         var droppedOptionNames: Set<String> = []
         if !rulePlan.finalOptions.isEmpty,
@@ -406,7 +410,8 @@ struct ConfigurationGenerator {
                 nodes: supported,
                 inlineNodes: inlineNodes,
                 remoteSubscriptions: remoteEntries,
-                rulePlan: rulePlan
+                rulePlan: rulePlan,
+                catchAllURL: schemes.quanXCatchAllURL
             )
         case .hiddify, .singBox:
             content = singBoxScheme(
@@ -415,11 +420,21 @@ struct ConfigurationGenerator {
                 nodes: supported,
                 rulePlan: rulePlan,
                 target: target,
-                dnsDomainRules: target == .singBox ? SingBoxDNSPolicy.domainRules(from:
-                    RuleSetEmissionPlanner(repository: schemes).plan(
-                        for: scheme, target: target, preferRuleSets: false
-                    ).inlineRules
-                ) : []
+                dnsDomainRules: target == .singBox ? SingBoxDNSPolicy.domainRules(from: rulePlan.entries.flatMap { entry in
+                    // The same names, in the same order, as the route rules:
+                    // a list's domain SRS where there is one, else its lines.
+                    switch entry {
+                    case .remote(let resource) where resource.dnsDomainURL != nil:
+                        return [SingBoxDNSPolicy.DomainSource.ruleSet(
+                            tag: Self.singBoxDNSRuleSetTag(resource.identifier), policyName: resource.policyName)]
+                    case .remote(let resource):
+                        return resource.localLines.map {
+                            .rule(RuleSetEmissionPlanner.InlineRule(policyName: resource.policyName, line: $0))
+                        }
+                    case .inline, .inlineSet:
+                        return entry.localRules.map(SingBoxDNSPolicy.DomainSource.rule)
+                    }
+                }) : []
             )
         case .egern:
             content = egernScheme(
@@ -1419,9 +1434,10 @@ struct ConfigurationGenerator {
     ) -> String {
         var output = ""
         for entry in plan.entries {
-            guard case .inline(let rule) = entry else { continue }
-            if let mapped = mappedRule(rule.line, policyName: rule.policyName, target: target) {
-                output += "\(indent)\(mapped)\n"
+            for rule in entry.localRules {
+                if let mapped = mappedRule(rule.line, policyName: rule.policyName, target: target) {
+                    output += "\(indent)\(mapped)\n"
+                }
             }
         }
 
@@ -1445,24 +1461,30 @@ struct ConfigurationGenerator {
     ) -> String {
         var output = ""
         for entry in plan.entries {
-            guard case .inline(let rule) = entry else { continue }
-            if let mapped = mappedRule(rule.line, policyName: rule.policyName, target: .quanx) {
-                output += mapped + "\n"
+            for rule in entry.localRules {
+                if let mapped = mappedRule(rule.line, policyName: rule.policyName, target: .quanx) {
+                    output += mapped + "\n"
+                }
             }
         }
 
         guard let finalGroup = plan.finalGroupName else { return output }
         let policy = confName(finalGroup)
-        let sourceRequestsNoResolve = plan.inlineRules.contains {
-            quanXSourceRuleRequestsNoResolve($0.line)
-        }
         // filter_local is matched in full before filter_remote, so this
         // catch-all would take every hostname before a remote list is read.
-        if dnsProtectionMode != .followScheme || sourceRequestsNoResolve, plan.remoteResources.isEmpty {
+        if quanXNeedsCatchAll(plan, dnsProtectionMode: dnsProtectionMode), plan.remoteResources.isEmpty {
             output += "host-keyword, ., \(policy)\n"
         }
         output += "final, \(policy)\n"
         return output
+    }
+
+    /// Remote lists count too: the rules they stand for asked for no-resolve
+    /// just as much as when they were written into the profile.
+    private func quanXNeedsCatchAll(_ plan: RuleSetEmissionPlanner.Plan, dnsProtectionMode: RuleSchemeDNSProtectionMode) -> Bool {
+        dnsProtectionMode != .followScheme
+            || plan.inlineRules.contains { quanXSourceRuleRequestsNoResolve($0.line) }
+            || plan.remoteResources.contains { $0.localLines.contains(where: quanXSourceRuleRequestsNoResolve) }
     }
 
     private func quanXSourceRuleRequestsNoResolve(_ rule: String) -> Bool {
@@ -1752,7 +1774,7 @@ struct ConfigurationGenerator {
                                         providerNames: providerNames, hidden: true)
         }
         let remoteResources = rulePlan.remoteResources
-        if !remoteResources.isEmpty {
+        if !remoteResources.isEmpty || !rulePlan.inlineSets.isEmpty {
             output += "\nrule-providers:\n"
             for resource in remoteResources {
                 let provider: (behavior: String, format: String, fileExtension: String)
@@ -1774,6 +1796,35 @@ struct ConfigurationGenerator {
                 output += "    path: ./ruleset/\(resource.identifier).\(provider.fileExtension)\n"
                 let referenceInterval = resource.options.first { $0.hasPrefix("update-interval=") }.flatMap { Int($0.dropFirst("update-interval=".count)) }
                 output += "    interval: \(resource.provider?.interval ?? referenceInterval ?? 86400)\n"
+                // No `proxy:`: mihomo routes the download through these same
+                // rules (measured 2026-10-18: raw.githubusercontent.com matched
+                // DOMAIN-KEYWORD,github and went out via 节点选择). Pinning a
+                // group would bypass the user's selection and auto-select.
+            }
+            for set in rulePlan.inlineSets {
+                output += "  \(set.identifier):\n"
+                output += "    type: inline\n"
+                switch set.behavior {
+                case .domain:
+                    output += "    behavior: domain\n    payload:\n"
+                    for rule in set.rules {
+                        let parts = rule.line.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                        // `+.` is mihomo's and Stash's suffix: the domain and every subdomain.
+                        let value = parts[0].uppercased() == "DOMAIN-SUFFIX" ? "+." + parts[1] : parts[1]
+                        output += "      - \(yaml(value))\n"
+                    }
+                case .ipcidr:
+                    output += "    behavior: ipcidr\n    payload:\n"
+                    for rule in set.rules {
+                        output += "      - \(yaml(rule.line.split(separator: ",")[1].trimmingCharacters(in: .whitespaces)))\n"
+                    }
+                case .classical:
+                    output += "    behavior: classical\n    payload:\n"
+                    for rule in set.rules {
+                        let parts = rule.line.split(separator: ",").prefix(2).map { $0.trimmingCharacters(in: .whitespaces) }
+                        output += "      - \(yaml(parts[0].uppercased() + "," + parts[1]))\n"
+                    }
+                }
             }
         }
         output += "\nrules:\n"
@@ -1785,6 +1836,9 @@ struct ConfigurationGenerator {
                 let options = resource.options.filter { !$0.hasPrefix("update-interval=") }
                 let noResolve = options.isEmpty ? (resource.format == .clashIPCIDRMRS ? ",no-resolve" : "") : "," + options.joined(separator: ",")
                 ruleLines.append("RULE-SET,\(resource.identifier),\(resource.policyName)\(noResolve)")
+                lastSourceWroteNoResolve = true
+            case .inlineSet(let set):
+                ruleLines.append("RULE-SET,\(set.identifier),\(set.policyName)" + (set.noResolve ? ",no-resolve" : ""))
                 lastSourceWroteNoResolve = true
             case .inline(let rule):
                 // The document dialect is Clash YAML for all three callers,
@@ -1891,6 +1945,8 @@ struct ConfigurationGenerator {
                 var options = resource.options
                 if !options.contains(where: { $0.hasPrefix("update-interval=") }) { options.append("update-interval=\(resource.provider?.interval ?? 86400)") }
                 output += (["RULE-SET", resource.url.absoluteString, confName(resource.policyName)] + options).joined(separator: ",") + "\n"
+            case .inlineSet(let set):
+                output += "RULE-SET,\(set.identifier),\(confName(set.policyName))" + (set.noResolve ? ",no-resolve" : "") + "\n"
             case .inline(let rule):
                 if let mapped = mappedRule(rule.line, policyName: rule.policyName, target: target) {
                     output += mapped + "\n"
@@ -1898,6 +1954,13 @@ struct ConfigurationGenerator {
             }
         }
         if let final = rulePlan.finalGroupName { output += (["FINAL", confName(final)] + rulePlan.finalOptions).joined(separator: ",") + "\n" }
+        for set in rulePlan.inlineSets {
+            output += "\n[Ruleset \(set.identifier)]\n"
+            for rule in set.rules {
+                let parts = rule.line.split(separator: ",").prefix(2).map { $0.trimmingCharacters(in: .whitespaces) }
+                output += parts[0].uppercased() + "," + parts[1] + "\n"
+            }
+        }
         return output
     }
 
@@ -1998,7 +2061,8 @@ struct ConfigurationGenerator {
         nodes: [ProxyNode],
         inlineNodes: [ProxyNode],
         remoteSubscriptions: [RemoteSubscriptionEntry],
-        rulePlan: RuleSetEmissionPlanner.Plan
+        rulePlan: RuleSetEmissionPlanner.Plan,
+        catchAllURL: URL? = nil
     ) -> String {
         let remoteNodeNames = remoteNodeNameSet(nodes: nodes, subscriptions: remoteSubscriptions)
         let remoteAliases = remoteSubscriptions.map(\.displayName)
@@ -2059,8 +2123,15 @@ struct ConfigurationGenerator {
         // rejects the whole file for either mistake: a missing module is
         // `配置文件缺少模块 [server_remote]`, and a repeated one is
         // `配置文件语法错误, duplicated section, [server_remote]`.
-        let remoteRules = rulePlan.remoteResources.map {
+        var remoteRules = rulePlan.remoteResources.map {
             "\($0.url.absoluteString), tag=\($0.identifier), force-policy=\(confName($0.policyName)), enabled=true"
+        }
+        // The DNS protection catch-all has to come after every host rule. With
+        // the lists remote, a local one would win over all of them, so it is
+        // the last remote list instead (see quanXLocalSchemeRules).
+        if !remoteRules.isEmpty, let catchAllURL, let final = rulePlan.finalGroupName,
+           quanXNeedsCatchAll(rulePlan, dnsProtectionMode: schemeDNSProtectionMode(scheme)) {
+            remoteRules.append("\(catchAllURL.absoluteString), tag=tower-catch-all, force-policy=\(confName(final)), enabled=true")
         }
         output += "\n[server_remote]\n"
         output += quanXRemoteSubscriptionLines(remoteSubscriptions)
@@ -4812,8 +4883,9 @@ extension ConfigurationGenerator {
             pendingFields = [:]
         }
 
-        for entry in rulePlan.entries {
+        for entry in rulePlan.entries.flatMap(\.expandingInlineSet) {
             switch entry {
+            case .inlineSet: break
             case .remote(let resource):
                 flushPending()
                 var remoteRule: [String: Any] = ["rule_set": [resource.identifier]]
@@ -4848,22 +4920,30 @@ extension ConfigurationGenerator {
 
         rules = singBoxRoutePrelude() + rules
 
+        let remoteDetour = singBoxRemoteDNSDetour(
+            finalGroup: finalGroup,
+            groups: groups,
+            nodes: nodes
+        )
         let remoteRuleSets: [[String: Any]] = rulePlan.remoteResources.map { resource in
             let format = resource.format == .singBoxBinarySRS ? "binary" : "source"
-            return [
+            var ruleSet: [String: Any] = [
                 "type": "remote",
                 "tag": resource.identifier,
                 "format": format,
                 "url": resource.url.absoluteString,
                 "update_interval": "1d"
             ]
-        }
-
-        let remoteDetour = singBoxRemoteDNSDetour(
-            finalGroup: finalGroup,
-            groups: groups,
-            nodes: nodes
-        )
+            // Hiddify's sing-box 1.13 predates `http_client` (below); without a
+            // detour the download goes DIRECT, which often fails in China.
+            if target == .hiddify, let remoteDetour { ruleSet["download_detour"] = remoteDetour }
+            return ruleSet
+        } + (dnsDomainRules.isEmpty ? [] : rulePlan.remoteResources.compactMap { resource -> [String: Any]? in
+            // Referenced only by the DNS rules built from the same plan.
+            guard let url = resource.dnsDomainURL else { return nil }
+            return ["type": "remote", "tag": Self.singBoxDNSRuleSetTag(resource.identifier),
+                    "format": "binary", "url": url.absoluteString, "update_interval": "1d"]
+        })
         var route: [String: Any] = [
             "rules": rules,
             "final": finalGroup,
@@ -4937,6 +5017,8 @@ extension ConfigurationGenerator {
     /// Imported schemes name their selectors themselves. Prefer the final
     /// selector because it represents the source scheme's default route, then
     /// fall back to a node-containing group or the first concrete node.
+    static func singBoxDNSRuleSetTag(_ identifier: String) -> String { identifier + "-dns" }
+
     private func singBoxRemoteDNSDetour(
         finalGroup: String,
         groups: [ResolvedSchemeGroup],
@@ -5132,8 +5214,9 @@ extension ConfigurationGenerator {
 
         output += "\nrules:\n"
         let finalGroup = rulePlan.finalGroupName ?? groups.first?.name ?? Self.egernDirect
-        for entry in rulePlan.entries {
+        for entry in rulePlan.entries.flatMap(\.expandingInlineSet) {
             switch entry {
+            case .inlineSet: break
             case .remote(let resource):
                 output += "  - rule_set:\n"
                 output += "      match: \(yaml(resource.url.absoluteString))\n"

@@ -79,7 +79,12 @@ final class RuleImportFidelityTests: XCTestCase {
         XCTAssertTrue(mihomo.content.contains("RULE-SET,tower-ads-domain-1,REJECT\n"), mihomo.content)
         XCTAssertTrue(mihomo.content.contains("RULE-SET,tower-cn-ip-2,DIRECT,no-resolve\n"), mihomo.content)
 
-        for target in [ClientTarget.surge, .clash, .loon, .singBox, .karing] {
+        // Stash reads domain and ipcidr MRS since 3.1.0.
+        let stash = output(scheme, .clash)
+        XCTAssertTrue(stash.content.contains("RULE-SET,tower-ads-domain-1,REJECT\n"), stash.content)
+        XCTAssertTrue(stash.diagnostics.filter { $0.contains("MRS") }.isEmpty, "\(stash.diagnostics)")
+
+        for target in [ClientTarget.surge, .loon, .singBox, .karing] {
             let result = output(scheme, target)
             XCTAssertFalse(result.hasInvalidPolicyReferences, "\(target): \(result.diagnostics)")
             XCTAssertFalse(result.content.contains(".mrs"), "\(target)")

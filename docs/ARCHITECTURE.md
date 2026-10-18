@@ -51,8 +51,11 @@ CloudSyncStore 使用只追加的 `state-versions-v2` 版本图保存快照和�
 - RuleScheme 保留策略组、节点正则、规则顺序；定制层和自定义规则流独立保存，刷新上游不覆盖。
 - 最终兜底和被引用基础组自动保留；地区组不互引或引用包含自己的父组。
 - RuleSetEmissionPlanner 仅引用内容、源哈希、覆盖条数、产物提交均验证通过的规则集，无法无损表示的部分交给生成器内联。
+  - 内置 ACL4SSR：Surge 引用原列表；mihomo 系和 Stash 用 MRS；sing-box MT 和 Hiddify 用 SRS（sing-box MT 的 DNS 规则另引用同一列表的纯域名 SRS）；Loon / QuanX / Egern 用塔台发布的同内容列表，覆盖类型由 App 按随包文本独立复算。
+  - 「我的规则集」里没有链接的连续规则，在 Surge 写成 `[Ruleset]`，mihomo 系和 Stash 写成 `type: inline` provider；分组补充规则仍逐条写在最前。
+  - 规则集下载：mihomo 系不写 `proxy:`，按配置自己的规则走（实测命中 github 关键词经节点选择）；Hiddify 用 `download_detour`，sing-box MT 用 `http_client`。
 - ACL4SSR_ 前缀防止资源拍平覆盖；Self-Configuration 只允许手动下载。
-- MRS/SRS 编译、反向校验和双提交发布见 [RELEASING](RELEASING.md)。
+- MRS/SRS 与 Loon / QuanX / Egern 列表的生成、反向校验和双提交发布见 [RELEASING](RELEASING.md)。
 
 ## 完整配置与节点订阅生成
 

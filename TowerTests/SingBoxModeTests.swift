@@ -223,10 +223,26 @@ struct SingBoxModeTests {
                     target: .singBox, preferRuleSets: remote).content
                 documents.append(try #require(JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any]))
             }
-            let first = try #require(documents[0]["dns"] as? [String: Any])
-            let second = try #require(documents[1]["dns"] as? [String: Any])
+            var first = try #require(documents[0]["dns"] as? [String: Any])
+            var second = try #require(documents[1]["dns"] as? [String: Any])
+            let remoteRules = try #require(first.removeValue(forKey: "rules") as? [[String: Any]])
+            let inlineRules = try #require(second.removeValue(forKey: "rules") as? [[String: Any]])
             #expect(first as NSDictionary == second as NSDictionary)
-            #expect((first["rules"] as? [[String: Any]])?.contains { $0["domain_suffix"] != nil } == true)
+            // A list's domain SRS stands where its names were: the same
+            // resolver, in the same order, once consecutive repeats collapse.
+            func servers(_ rules: [[String: Any]]) -> [String] {
+                rules.map { ($0["server"] as? String) ?? ($0["action"] as? String) ?? "" }
+                    .reduce(into: [String]()) { if $0.last != $1 { $0.append($1) } }
+            }
+            #expect(servers(remoteRules) == servers(inlineRules))
+            #expect(inlineRules.contains { $0["domain_suffix"] != nil })
+            let ruleSets = try #require((documents[0]["route"] as? [String: Any])?["rule_set"] as? [[String: Any]])
+            let domainSets = Set(ruleSets.filter { ($0["url"] as? String)?.hasSuffix("_singbox_domain.srs") == true }
+                .compactMap { $0["tag"] as? String })
+            // tower-geoip-cn filters answers (match_response); only the -dns sets stand for lists.
+            let referenced = remoteRules.flatMap { $0["rule_set"] as? [String] ?? [] }.filter { $0.hasSuffix("-dns") }
+            #expect(!referenced.isEmpty)
+            #expect(Set(referenced).isSubset(of: domainSets))
         }
     }
 

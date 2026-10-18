@@ -22,6 +22,11 @@ struct RuleSetEmissionPlanner {
         let format: NativeFormat
         var options: [String] = []
         var provider: RuleProviderMetadata? = nil
+        /// sing-box: the domain-only SRS of the same list, for DNS rules.
+        var dnsDomainURL: URL? = nil
+        /// The rule lines this reference stands for, where Tower knows them.
+        /// DNS projection and Quantumult X's no-resolve check read them.
+        var localLines: [String] = []
     }
 
     struct InlineRule: Equatable {
@@ -29,9 +34,47 @@ struct RuleSetEmissionPlanner {
         let line: String
     }
 
+    /// Consecutive rules from one of the user's own rule sets that has no URL
+    /// to fetch, written once as the client's inline rule set: a `[Ruleset]`
+    /// section in Surge, a `type: inline` provider in mihomo and Stash. Only
+    /// plain `TYPE,value` lines qualify, so nothing is lost on the way.
+    struct InlineRuleSet: Equatable {
+        enum Behavior: Equatable { case domain, ipcidr, classical }
+
+        let identifier: String
+        let policyName: String
+        let behavior: Behavior
+        let rules: [InlineRule]
+        /// Written on the `RULE-SET` line, as the same rules would carry it
+        /// one by one: Surge adds it to every IP rule, mihomo and Stash only
+        /// keep what the source wrote, so a set never mixes the two.
+        let noResolve: Bool
+    }
+
     enum Entry: Equatable {
         case remote(RemoteResource)
         case inline(InlineRule)
+        case inlineSet(InlineRuleSet)
+
+        /// The rules this entry writes into the profile itself.
+        var localRules: [InlineRule] {
+            switch self {
+            case .remote: []
+            case .inline(let rule): [rule]
+            case .inlineSet(let set): set.rules
+            }
+        }
+
+        var isLocal: Bool {
+            if case .remote = self { return false }
+            return true
+        }
+
+        /// For formats without inline sets: the set's rules, one by one.
+        var expandingInlineSet: [Entry] {
+            guard case .inlineSet(let set) = self else { return [self] }
+            return set.rules.map(Entry.inline)
+        }
     }
 
     /// A binary MRS rule set the target cannot read or reference.
@@ -54,9 +97,13 @@ struct RuleSetEmissionPlanner {
         }
 
         var inlineRules: [InlineRule] {
+            entries.flatMap(\.localRules)
+        }
+
+        var inlineSets: [InlineRuleSet] {
             entries.compactMap {
-                guard case .inline(let rule) = $0 else { return nil }
-                return rule
+                guard case .inlineSet(let set) = $0 else { return nil }
+                return set
             }
         }
     }
@@ -67,10 +114,14 @@ struct RuleSetEmissionPlanner {
         self.repository = repository
     }
 
+    /// `isExpressible` tells which local rules the target can write at all.
+    /// A rule it drops does not count as a local rule that a remote list in
+    /// Loon or Quantumult X would have to stay in front of.
     func plan(
         for scheme: RuleScheme,
         target: ClientTarget,
-        preferRuleSets: Bool
+        preferRuleSets: Bool,
+        isExpressible: (String) -> Bool = { _ in true }
     ) -> Plan {
         var entries: [Entry] = []
         var finalGroupName: String?
@@ -79,10 +130,40 @@ struct RuleSetEmissionPlanner {
         // What each generic remote entry expands to if it has to be inlined.
         var inlineFallbacks: [Int: [Entry]] = [:]
         var unreadable: [UnreadableResource] = []
+        var pendingSet: (key: String, rules: [InlineRule], noResolve: Bool)?
+        var inlineSetIndex = 0
+        func flushPendingSet() {
+            guard let run = pendingSet else { return }
+            pendingSet = nil
+            // One rule gains nothing from a set of its own.
+            guard run.rules.count >= 2, let first = run.rules.first else {
+                entries.append(contentsOf: run.rules.map(Entry.inline))
+                return
+            }
+            inlineSetIndex += 1
+            entries.append(.inlineSet(InlineRuleSet(
+                identifier: "tower-local-\(inlineSetIndex)",
+                policyName: first.policyName,
+                behavior: Self.inlineSetBehavior(run.rules),
+                rules: run.rules,
+                noResolve: run.noResolve
+            )))
+        }
 
         for ruleset in scheme.rulesets {
-            // Only mihomo reads MRS, and it can only fetch it: there are no
-            // lines to write locally, whatever the rule-set preference.
+            let setKey = preferRuleSets ? inlineSetKey(ruleset, target: target) : nil
+            if pendingSet?.key != setKey { flushPendingSet() }
+            if let setKey, case .inline(let line) = ruleset.resource {
+                if pendingSet == nil {
+                    let isIP = Self.inlineSetIPTypes.contains(Self.ruleType(in: line))
+                    let wroteNoResolve = line.lowercased().hasSuffix(",no-resolve")
+                    pendingSet = (setKey, [], isIP && ([.surge, .surgeMac].contains(target) || wroteNoResolve))
+                }
+                pendingSet?.rules.append(InlineRule(policyName: ruleset.groupName, line: line))
+                continue
+            }
+            // Only mihomo and Stash read MRS, and they can only fetch it: there
+            // are no lines to write locally, whatever the rule-set preference.
             if ruleset.isBinaryRuleSet, let url = ruleset.resource.downloadURL {
                 let behavior = ruleset.provider?.behavior?.lowercased()
                 if Self.mrsTargets.contains(target), behavior == "domain" || behavior == "ipcidr" {
@@ -115,6 +196,23 @@ struct RuleSetEmissionPlanner {
                 if line.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "FINAL" {
                     finalGroupName = ruleset.groupName
                     finalOptions = ruleset.options ?? []
+                } else if preferRuleSets, ruleset.origin == nil, ruleset.options == nil,
+                          let dialect = RuleSchemeRepository.RuleListDialect(target: target),
+                          dialect != .egern,
+                          let url = repository.publishedLocalRule(line, dialect: dialect) {
+                    // Loon and Quantumult X match every local rule before any
+                    // remote list, so the scheme's own trailing GEOIP rule
+                    // would jump ahead of every list. As a list it keeps its place.
+                    remoteIndex += 1
+                    let rule = InlineRule(policyName: ruleset.groupName, line: line)
+                    inlineFallbacks[entries.count] = [.inline(rule)]
+                    entries.append(.remote(RemoteResource(
+                        identifier: identifier(for: url, index: remoteIndex),
+                        url: url,
+                        policyName: ruleset.groupName,
+                        format: dialect == .quanx ? .quanXFilter : .classicalText,
+                        localLines: [line]
+                    )))
                 } else {
                     entries.append(.inline(InlineRule(policyName: ruleset.groupName, line: line)))
                 }
@@ -133,7 +231,8 @@ struct RuleSetEmissionPlanner {
                     entries.append(contentsOf: optimized.entries)
                     remoteIndex = optimized.finalRemoteIndex
                 } else if preferRuleSets, ruleset.options == nil, ruleset.provider == nil,
-                          target == .singBox,
+                          // Hiddify 4.0 embeds sing-box 1.13, which reads SRS v2.
+                          [.singBox, .hiddify].contains(target),
                           let optimized = optimizedSingBoxEntries(
                             resource: ruleset.resource,
                             sourceURL: url,
@@ -143,6 +242,27 @@ struct RuleSetEmissionPlanner {
                           ) {
                     entries.append(contentsOf: optimized.entries)
                     remoteIndex = optimized.finalRemoteIndex
+                } else if preferRuleSets, ruleset.options == nil, ruleset.provider == nil,
+                          let dialect = RuleSchemeRepository.RuleListDialect(target: target),
+                          let alternative = repository.dialectResource(dialect, for: ruleset.resource, matching: lines) {
+                    // The bundled list rewritten in this client's own format.
+                    // The types it could not carry stay right behind it.
+                    remoteIndex += 1
+                    let covered = lines.filter { alternative.coveredRuleTypes.contains(ruleType(in: $0)) }
+                    inlineFallbacks[entries.count] = covered.map {
+                        .inline(InlineRule(policyName: ruleset.groupName, line: $0))
+                    }
+                    entries.append(.remote(RemoteResource(
+                        identifier: identifier(for: url, index: remoteIndex, suffix: dialect.rawValue),
+                        url: alternative.url,
+                        policyName: ruleset.groupName,
+                        format: dialect == .quanx ? .quanXFilter : dialect == .egern ? .egernYAML : .classicalText,
+                        localLines: covered
+                    )))
+                    entries.append(contentsOf: lines.compactMap { line in
+                        guard !alternative.coveredRuleTypes.contains(ruleType(in: line)) else { return nil }
+                        return .inline(InlineRule(policyName: ruleset.groupName, line: line))
+                    })
                 } else if preferRuleSets,
                    RoutingRuleCapabilities.optionsSupported((ruleset.options ?? []).filter { !$0.hasPrefix("update-interval=") }, target: target),
                    let format = providerFormat(ruleset, target: target, lines: lines) ?? nativeFormat(
@@ -160,7 +280,8 @@ struct RuleSetEmissionPlanner {
                         url: url,
                         policyName: ruleset.groupName,
                         format: format,
-                        options: ruleset.options ?? [], provider: ruleset.provider
+                        options: ruleset.options ?? [], provider: ruleset.provider,
+                        localLines: RuleResourceContent.normalized(lines, behavior: ruleset.provider?.behavior)
                     )))
                 } else {
                     entries.append(contentsOf: RuleResourceContent.normalized(lines, behavior: ruleset.provider?.behavior).map {
@@ -170,12 +291,16 @@ struct RuleSetEmissionPlanner {
             }
         }
 
+        flushPendingSet()
+
         // Loon and Quantumult X keep remote rule lists in their own section
         // and match every local rule before any of them (Loon: local > plugin
         // > remote; Quantumult X: filter_local > filter_remote). A list that
         // came before a local rule would lose to it, so it is inlined instead.
         if [.loon, .quanx].contains(target),
-           let lastInline = entries.lastIndex(where: { if case .inline = $0 { return true } else { return false } }) {
+           let lastInline = entries.lastIndex(where: { entry in
+               entry.localRules.contains { isExpressible($0.line) }
+           }) {
             entries = entries.indices.flatMap { index -> [Entry] in
                 guard index < lastInline, let fallback = inlineFallbacks[index] else { return [entries[index]] }
                 return fallback
@@ -185,8 +310,62 @@ struct RuleSetEmissionPlanner {
         return Plan(entries: entries, finalGroupName: finalGroupName, finalOptions: finalOptions, unreadableResources: unreadable)
     }
 
+    /// Surge documents `[Ruleset <name>]` (Mac 5.3.1, editable on iOS from
+    /// 5.22); mihomo has `type: inline` providers since 1.19.1 and Stash since
+    /// iOS 3.6 / macOS 4.3. Karing, Shadowrocket and the Clash app document
+    /// none, and Loon and Quantumult X have no inline set at all.
+    private static let inlineSetTargets: Set<ClientTarget> = [
+        .surge, .surgeMac, .clash, .clashVerge, .clashMac, .flClash, .mihomoParty, .clashMi
+    ]
+    private static let inlineSetDomainTypes: Set<String> = ["DOMAIN", "DOMAIN-SUFFIX"]
+    static let inlineSetIPTypes: Set<String> = ["IP-CIDR", "IP-CIDR6"]
+    private static let inlineSetTypes = inlineSetDomainTypes.union(inlineSetIPTypes).union(["DOMAIN-KEYWORD"])
+
+    /// Groups rules that came from the same rule set of the user's library
+    /// and go to the same policy. Group supplements stay single rules: they
+    /// must match first, one by one, from the most specific.
+    private func inlineSetKey(_ ruleset: RuleSchemeRuleset, target: ClientTarget) -> String? {
+        guard Self.inlineSetTargets.contains(target),
+              case .added(let name) = ruleset.origin,
+              case .inline(let line) = ruleset.resource,
+              ruleset.options == nil, ruleset.provider == nil,
+              Self.isPlainSetRule(line) else { return nil }
+        // Domain and IP rules never share a set, and in mihomo and Stash IP
+        // rules with and without no-resolve do not either.
+        let isIP = Self.inlineSetIPTypes.contains(Self.ruleType(in: line))
+        let wroteNoResolve = line.lowercased().hasSuffix(",no-resolve") && ![.surge, .surgeMac].contains(target)
+        let kind = isIP ? (wroteNoResolve ? "ip-no-resolve" : "ip") : "domain"
+        return [name, ruleset.groupName, kind].joined(separator: "\u{1F}")
+    }
+
+    /// `TYPE,value`, or an IP rule with `no-resolve`. The value is kept to
+    /// characters that cannot end a line or a field in any of the formats.
+    private static func isPlainSetRule(_ line: String) -> Bool {
+        let parts = line.split(separator: ",", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard parts.count == 2 || parts.count == 3, inlineSetTypes.contains(parts[0].uppercased()) else { return false }
+        if parts.count == 3 {
+            guard inlineSetIPTypes.contains(parts[0].uppercased()), parts[2].lowercased() == "no-resolve" else { return false }
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_:/")
+        return !parts[1].isEmpty && parts[1].unicodeScalars.allSatisfy(allowed.contains)
+    }
+
+    private static func inlineSetBehavior(_ rules: [InlineRule]) -> InlineRuleSet.Behavior {
+        let types = Set(rules.map { ruleType(in: $0.line) })
+        if types.isSubset(of: inlineSetDomainTypes) { return .domain }
+        if types.isSubset(of: inlineSetIPTypes) { return .ipcidr }
+        return .classical
+    }
+
+    static func ruleType(in line: String) -> String {
+        line.split(separator: ",", maxSplits: 1).first?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+    }
+
     /// Karing is left out: its core is sing-box, which has no MRS reader.
-    private static let mrsTargets: Set<ClientTarget> = [.clashApple, .clashVerge, .clashMac, .flClash, .mihomoParty, .clashMi]
+    /// Stash reads domain and ipcidr MRS since 3.1.0 (stash.wiki/en/rules/rule-set).
+    private static let mrsTargets: Set<ClientTarget> = [.clash, .clashApple, .clashVerge, .clashMac, .flClash, .mihomoParty, .clashMi]
 
     /// MRS supports compact domain and CIDR tries, not the mixed `classical`
     /// grammar used by ACL4SSR. Tower therefore emits verified binary slices
@@ -277,7 +456,9 @@ struct RuleSetEmissionPlanner {
                 identifier: identifier(for: sourceURL, index: remoteIndex, suffix: "srs"),
                 url: alternative.url,
                 policyName: policyName,
-                format: .singBoxBinarySRS
+                format: .singBoxBinarySRS,
+                dnsDomainURL: alternative.dnsDomainURL,
+                localLines: lines.filter { coveredTypes.contains(ruleType(in: $0)) }
             ))
         ]
         entries.append(contentsOf: lines.compactMap { line in

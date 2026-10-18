@@ -19,6 +19,66 @@ struct RuleSchemeRepository {
     struct SingBoxSRSResource: Equatable {
         let url: URL
         let coveredRuleTypes: Set<String>
+        /// The domain half of the same list, for DNS rules, which may only
+        /// test the queried name: the covered domain types, nothing else.
+        var dnsDomainURL: URL? = nil
+    }
+
+    /// A remote rule-list format other than Surge's, Clash's and sing-box's.
+    enum RuleListDialect: String, CaseIterable {
+        case loon, quanx, egern
+
+        init?(target: ClientTarget) {
+            switch target {
+            case .loon: self = .loon
+            case .quanx: self = .quanx
+            case .egern: self = .egern
+            default: return nil
+            }
+        }
+
+        var fileExtension: String { self == .egern ? "yaml" : "list" }
+
+        /// Mirrors `LOON_RULE_TYPES`, `QUANX_RULE_TYPES` and `EGERN_RULE_KEYS`
+        /// in Scripts/update_acl4ssr_rules.py.
+        var supportedTypes: Set<String> {
+            switch self {
+            case .loon:
+                ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6",
+                 "GEOIP", "IP-ASN", "USER-AGENT", "URL-REGEX"]
+            case .quanx:
+                ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "IP-CIDR",
+                 "IP-CIDR6", "IP6-CIDR", "GEOIP", "IP-ASN", "USER-AGENT"]
+            case .egern:
+                ["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "IP-CIDR",
+                 "IP-CIDR6", "IP6-CIDR", "GEOIP", "IP-ASN", "URL-REGEX", "USER-AGENT"]
+            }
+        }
+
+        /// Egern has one `no_resolve` flag for a whole list.
+        var needsUniformNoResolve: Bool { self == .egern }
+    }
+
+    struct DialectRuleListResource: Equatable {
+        let url: URL
+        let coveredRuleTypes: Set<String>
+    }
+
+    /// The exact content of the published files that stand for one local
+    /// rule. Known in advance, so their digests are checked directly.
+    static let inlineRuleArtifacts: [String: [RuleListDialect: (content: String, filename: String)]] = [
+        "GEOIP,CN": [
+            .loon: ("GEOIP,CN,no-resolve\n", "Tower_GEOIP_CN_loon.list"),
+            .quanx: ("geoip, CN, proxy\n", "Tower_GEOIP_CN_quanx.list")
+        ]
+    ]
+    static let quanXCatchAllArtifact = (content: "host-keyword, ., proxy\n", filename: "Tower_catch_all_quanx.list")
+
+    /// Published lists that stand for single local rules (GEOIP,CN) and for
+    /// Quantumult X's DNS protection line.
+    struct PublishedLocalRules: Equatable {
+        var inlineRules: [String: [RuleListDialect: URL]] = [:]
+        var quanXCatchAll: URL?
     }
 
     /// Stable prefix used by `Scripts/update_acl4ssr_rules.py` after Xcode
@@ -29,15 +89,23 @@ struct RuleSchemeRepository {
     private let downloadStore: RuleDownloadStore?
     private let clashMRSResourcesOverride: [String: [ClashMRSResource]]?
     private let singBoxSRSResourcesOverride: [String: SingBoxSRSResource]?
+    private let dialectResourcesOverride: [String: [RuleListDialect: DialectRuleListResource]]?
+    private let publishedRulesOverride: PublishedLocalRules?
 
     init(
         bundle: Bundle = .main,
         downloadStore: RuleDownloadStore? = nil,
         clashMRSResources: [URL: [ClashMRSResource]]? = nil,
-        singBoxSRSResources: [URL: SingBoxSRSResource]? = nil
+        singBoxSRSResources: [URL: SingBoxSRSResource]? = nil,
+        dialectResources: [URL: [RuleListDialect: DialectRuleListResource]]? = nil,
+        publishedLocalRules: PublishedLocalRules? = nil
     ) {
         self.bundle = bundle
         self.downloadStore = downloadStore
+        dialectResourcesOverride = dialectResources?.reduce(into: [:]) { result, item in
+            result[item.key.absoluteString] = item.value
+        }
+        publishedRulesOverride = publishedLocalRules
         clashMRSResourcesOverride = clashMRSResources?.reduce(into: [:]) { result, item in
             result[item.key.absoluteString] = item.value
         }
@@ -159,6 +227,34 @@ struct RuleSchemeRepository {
         return verified.resource
     }
 
+    /// The same bundled list in Loon's, Quantumult X's or Egern's own remote
+    /// format, generated from this exact source. Never for other URLs.
+    func dialectResource(
+        _ dialect: RuleListDialect,
+        for resource: RuleSchemeRuleset.Resource,
+        matching resolvedLines: [String]
+    ) -> DialectRuleListResource? {
+        guard case .remote(let url) = resource else { return nil }
+        if let dialectResourcesOverride {
+            return dialectResourcesOverride[url.absoluteString]?[dialect]
+        }
+        guard let verified = RuleSchemeSnapshotCache.shared.dialectResources(in: bundle)[url.absoluteString],
+              verified.sourceRulesSHA256 == RuleSetSourceFingerprint.sha256(for: resolvedLines) else { return nil }
+        return verified.resources[dialect]
+    }
+
+    /// A published list holding exactly this one local rule, for clients that
+    /// match local rules before every remote list.
+    func publishedLocalRule(_ line: String, dialect: RuleListDialect) -> URL? {
+        let key = line.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let rules = publishedRulesOverride ?? RuleSchemeSnapshotCache.shared.publishedLocalRules(in: bundle)
+        return rules.inlineRules[key]?[dialect]
+    }
+
+    var quanXCatchAllURL: URL? {
+        (publishedRulesOverride ?? RuleSchemeSnapshotCache.shared.publishedLocalRules(in: bundle)).quanXCatchAll
+    }
+
     private func bundledContent(named name: String) -> String? {
         guard let url = bundledResourceURL(named: name) else { return nil }
         return try? String(contentsOf: url, encoding: .utf8)
@@ -223,6 +319,11 @@ private struct VerifiedSingBoxSRSResource {
     let resource: RuleSchemeRepository.SingBoxSRSResource
 }
 
+private struct VerifiedDialectResources {
+    let sourceRulesSHA256: String
+    let resources: [RuleSchemeRepository.RuleListDialect: RuleSchemeRepository.DialectRuleListResource]
+}
+
 /// Parsing three configs and reading their lists is not work the launch path
 /// should do, so it happens once on first use and is shared afterwards.
 private final class RuleSchemeSnapshotCache: @unchecked Sendable {
@@ -233,6 +334,38 @@ private final class RuleSchemeSnapshotCache: @unchecked Sendable {
     private var linesByName: [String: [String]] = [:]
     private var clashMRSResourcesByBundle: [String: [String: VerifiedClashMRSResources]] = [:]
     private var singBoxSRSResourcesByBundle: [String: [String: VerifiedSingBoxSRSResource]] = [:]
+    private var dialectResourcesByBundle: [String: [String: VerifiedDialectResources]] = [:]
+    private var publishedLocalRulesByBundle: [String: RuleSchemeRepository.PublishedLocalRules] = [:]
+
+    func dialectResources(in bundle: Bundle) -> [String: VerifiedDialectResources] {
+        let key = bundle.bundlePath
+        lock.lock()
+        if let cached = dialectResourcesByBundle[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let loaded = Self.loadDialectResources(from: bundle)
+        lock.lock()
+        dialectResourcesByBundle[key] = loaded
+        lock.unlock()
+        return loaded
+    }
+
+    func publishedLocalRules(in bundle: Bundle) -> RuleSchemeRepository.PublishedLocalRules {
+        let key = bundle.bundlePath
+        lock.lock()
+        if let cached = publishedLocalRulesByBundle[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let loaded = Self.loadPublishedLocalRules(from: bundle)
+        lock.lock()
+        publishedLocalRulesByBundle[key] = loaded
+        lock.unlock()
+        return loaded
+    }
 
     func schemes(in bundle: Bundle) -> [RuleScheme] {
         let key = bundle.bundlePath
@@ -466,12 +599,105 @@ private final class RuleSchemeSnapshotCache: @unchecked Sendable {
                   coveredTypes == sourceAnalysis.srsCoveredRuleTypes,
                   inputRuleCount == sourceAnalysis.srsInputRuleCount,
                   residualRuleCount == sourceAnalysis.srsResidualRuleCount else { continue }
+            var resource = RuleSchemeRepository.SingBoxSRSResource(url: url, coveredRuleTypes: coveredTypes)
+            let domainTypes = coveredTypes.intersection(["DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD"])
+            let domainRuleCount = domainTypes.reduce(0) { $0 + sourceAnalysis.ruleTypeCounts[$1, default: 0] }
+            if let domain = entry["srsDomain"] as? [String: Any],
+               domain["sourceSha256"] as? String == sourceSHA256,
+               domain["sourceFormatVersion"] as? Int == 2,
+               let covered = domain["coveredRuleTypes"] as? [String],
+               Set(covered.map { $0.uppercased() }) == domainTypes, covered.count == domainTypes.count,
+               domain["inputRuleCount"] as? Int == domainRuleCount,
+               domain["residualRuleCount"] as? Int == sourceRuleCount - domainRuleCount,
+               isHexDigest(domain["sha256"]),
+               let domainURLString = domain["url"] as? String,
+               let domainURL = URL(string: domainURLString),
+               isValidRemoteArtifactURL(
+                domainURL,
+                revision: manifest.revision,
+                artifactCommit: manifest.artifactCommit,
+                filename: "\((filename as NSString).deletingPathExtension)_singbox_domain.srs"
+               ) {
+                resource.dnsDomainURL = domainURL
+            }
             result[source] = VerifiedSingBoxSRSResource(
                 sourceRulesSHA256: sourceAnalysis.sourceRulesSHA256,
-                resource: .init(url: url, coveredRuleTypes: coveredTypes)
+                resource: resource
             )
         }
         return result
+    }
+
+    private static func loadDialectResources(from bundle: Bundle) -> [String: VerifiedDialectResources] {
+        guard let manifest = loadBinaryRulesetManifest(from: bundle) else { return [:] }
+        var result: [String: VerifiedDialectResources] = [:]
+        for (filename, entry) in manifest.rulesets {
+            guard let source = entry["source"] as? String,
+                  let sourceSHA256 = entry["sha256"] as? String,
+                  bundledSHA256(named: filename, in: bundle) == sourceSHA256.lowercased(),
+                  let sourceRuleCount = entry["ruleCount"] as? Int,
+                  let sourceAnalysis = analyzeBundledClassicalRules(named: filename, in: bundle),
+                  sourceAnalysis.totalRuleCount == sourceRuleCount else { continue }
+            var resources: [RuleSchemeRepository.RuleListDialect: RuleSchemeRepository.DialectRuleListResource] = [:]
+            for dialect in RuleSchemeRepository.RuleListDialect.allCases {
+                let coverage = sourceAnalysis.dialectCoverage(dialect)
+                guard let metadata = entry[dialect.rawValue] as? [String: Any],
+                      metadata["sourceSha256"] as? String == sourceSHA256,
+                      let covered = metadata["coveredRuleTypes"] as? [String],
+                      !covered.isEmpty, Set(covered).count == covered.count,
+                      Set(covered.map { $0.uppercased() }) == coverage.coveredRuleTypes,
+                      metadata["inputRuleCount"] as? Int == coverage.inputRuleCount,
+                      metadata["residualRuleCount"] as? Int == sourceRuleCount - coverage.inputRuleCount,
+                      isHexDigest(metadata["sha256"]),
+                      let urlString = metadata["url"] as? String,
+                      let url = URL(string: urlString),
+                      isValidRemoteArtifactURL(
+                        url,
+                        revision: manifest.revision,
+                        artifactCommit: manifest.artifactCommit,
+                        filename: "\((filename as NSString).deletingPathExtension)_\(dialect.rawValue).\(dialect.fileExtension)"
+                      ) else { continue }
+                resources[dialect] = .init(url: url, coveredRuleTypes: coverage.coveredRuleTypes)
+            }
+            guard !resources.isEmpty else { continue }
+            result[source] = VerifiedDialectResources(
+                sourceRulesSHA256: sourceAnalysis.sourceRulesSHA256,
+                resources: resources
+            )
+        }
+        return result
+    }
+
+    /// The files are fixed text, so the manifest digest must be the digest
+    /// of exactly the text Tower expects them to hold.
+    private static func loadPublishedLocalRules(from bundle: Bundle) -> RuleSchemeRepository.PublishedLocalRules {
+        guard let manifest = loadBinaryRulesetManifest(from: bundle) else { return .init() }
+        func verifiedURL(_ metadata: Any?, content: String, filename: String) -> URL? {
+            guard let metadata = metadata as? [String: Any],
+                  metadata["sha256"] as? String == SHA256.hash(data: Data(content.utf8)).map({ String(format: "%02x", $0) }).joined(),
+                  let urlString = metadata["url"] as? String,
+                  let url = URL(string: urlString),
+                  isValidRemoteArtifactURL(url, revision: manifest.revision,
+                                           artifactCommit: manifest.artifactCommit, filename: filename) else { return nil }
+            return url
+        }
+        var rules = RuleSchemeRepository.PublishedLocalRules()
+        let published = manifest.raw["inlineRules"] as? [String: [String: Any]] ?? [:]
+        for (line, artifacts) in RuleSchemeRepository.inlineRuleArtifacts {
+            for (dialect, artifact) in artifacts {
+                if let url = verifiedURL(published[line]?[dialect.rawValue], content: artifact.content, filename: artifact.filename) {
+                    rules.inlineRules[line, default: [:]][dialect] = url
+                }
+            }
+        }
+        let catchAll = RuleSchemeRepository.quanXCatchAllArtifact
+        rules.quanXCatchAll = verifiedURL(manifest.raw["quanxCatchAll"], content: catchAll.content, filename: catchAll.filename)
+        return rules
+    }
+
+    private static func isHexDigest(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return value.count == 64 && value.allSatisfy(\.isHexDigit)
     }
 
     /// Re-derives the manifest's coverage claims from the exact bundled text.
@@ -503,7 +729,8 @@ private final class RuleSchemeSnapshotCache: @unchecked Sendable {
     ) -> (
         revision: String,
         artifactCommit: String,
-        rulesets: [String: [String: Any]]
+        rulesets: [String: [String: Any]],
+        raw: [String: Any]
     )? {
         guard let manifestURL = bundle.url(
             forResource: "manifest",
@@ -519,7 +746,7 @@ private final class RuleSchemeSnapshotCache: @unchecked Sendable {
               let rulesets = manifest["rulesets"] as? [String: [String: Any]] else {
             return nil
         }
-        return (revision, artifactCommit, rulesets)
+        return (revision, artifactCommit, rulesets, manifest)
     }
 
     private static func isLowercaseGitCommit(_ value: String) -> Bool {
@@ -562,8 +789,16 @@ private struct BundledClassicalRuleAnalysis {
     let srsCoveredRuleTypes: Set<String>
     let srsInputRuleCount: Int
     let srsResidualRuleCount: Int
+    let ruleTypeCounts: [String: Int]
+    private let lines: [String]
 
     init(lines: [String]) {
+        self.lines = lines
+        ruleTypeCounts = lines.reduce(into: [:]) { counts, line in
+            let type = line.split(separator: ",", maxSplits: 1).first
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() } ?? ""
+            counts[type, default: 0] += 1
+        }
         totalRuleCount = lines.count
         sourceRulesSHA256 = RuleSetSourceFingerprint.sha256(for: lines)
 
@@ -660,6 +895,41 @@ private struct BundledClassicalRuleAnalysis {
         srsCoveredRuleTypes = coveredTypes
         srsInputRuleCount = coveredCount
         srsResidualRuleCount = totalRuleCount - coveredCount
+    }
+
+    /// Mirrors `_dialect_rules` in Scripts/update_acl4ssr_rules.py: a type is
+    /// covered only if every one of its lines is `TYPE,value` or an IP rule
+    /// with exactly `no-resolve`.
+    func dialectCoverage(
+        _ dialect: RuleSchemeRepository.RuleListDialect
+    ) -> (coveredRuleTypes: Set<String>, inputRuleCount: Int) {
+        let ipTypes: Set<String> = ["IP-CIDR", "IP-CIDR6", "IP6-CIDR", "GEOIP", "IP-ASN"]
+        let parsed = lines.map { line in
+            line.split(separator: ",", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        var complete: [String: Bool] = [:]
+        for fields in parsed {
+            let type = fields[0].uppercased()
+            guard dialect.supportedTypes.contains(type) else { continue }
+            let valid = fields.count >= 2 && !fields[1].isEmpty && (
+                fields.count == 2
+                    || (fields.count == 3 && ipTypes.contains(type) && fields[2].lowercased() == "no-resolve")
+            )
+            complete[type] = (complete[type] ?? true) && valid
+        }
+        if dialect.needsUniformNoResolve {
+            let states = Set(parsed.compactMap { fields -> Bool? in
+                let type = fields[0].uppercased()
+                guard ipTypes.contains(type), complete[type] == true else { return nil }
+                return fields.count == 3 || type == "GEOIP"
+            })
+            if states.count > 1 {
+                for type in ipTypes where complete[type] != nil { complete[type] = false }
+            }
+        }
+        let covered = Set(complete.filter(\.value).keys)
+        return (covered, parsed.filter { covered.contains($0[0].uppercased()) }.count)
     }
 
     func mrsInputRuleCount(
