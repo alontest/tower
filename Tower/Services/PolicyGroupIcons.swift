@@ -121,7 +121,7 @@ enum PolicyGroupIconSupport {
         "🎞": "film.fill", "🧸": "sparkles", "🎬": "film.stack.fill", "🎦": "film.stack.fill",
         "📺": "tv.fill", "🎵": "music.note", "🎧": "headphones", "🟢": "headphones",
         "🎶": "music.note.list", "📲": "paperplane.fill", "✈": "paperplane.fill",
-        "💬": "brain.head.profile", "🤖": "brain.head.profile", "🔷": "sparkle", "✨": "sparkle",
+        "💬": "bubble.left.and.bubble.right.fill", "🤖": "brain.head.profile", "🔷": "sparkle", "✨": "sparkle",
         "🐦": "bird.fill", "🕊": "bird.fill", "♾": "infinity",
         "🎙": "bubble.left.and.bubble.right.fill", "🐙": "chevron.left.forwardslash.chevron.right",
         "☁": "cloud.fill", "💳": "creditcard.fill", "🪙": "bitcoinsign.circle.fill",
@@ -129,7 +129,13 @@ enum PolicyGroupIconSupport {
         "🍎": "apple.logo", "🔍": "magnifyingglass", "🔎": "magnifyingglass",
         "🎮": "gamecontroller.fill", "🎯": "arrow.right.circle.fill", "🚀": "airplane",
         "⚡": "bolt.fill", "🔁": "arrow.triangle.2.circlepath", "⚖": "scalemass.fill",
-        "🧩": "square.stack.3d.up.fill",
+        "🧩": "square.stack.3d.up.fill", "🎓": "graduationcap.fill", "📰": "newspaper.fill",
+        "📧": "envelope.fill", "🏦": "building.columns.fill", "⚽": "soccerball", "👥": "person.2.fill",
+        "📥": "arrow.down.circle.fill", "🛡": "lock.shield.fill", "📶": "speedometer", "🍿": "play.tv.fill",
+        "👽": "person.3.fill", "📕": "book.closed.fill", "📞": "phone.fill", "🐳": "shippingbox.fill",
+        "🎨": "paintpalette.fill", "🛒": "cart.fill", "🏡": "house.fill", "💰": "dollarsign.circle.fill",
+        "⭐": "star.fill", "🛠": "wrench.and.screwdriver.fill", "🗺": "map.fill", "🔀": "arrow.triangle.branch",
+        "📣": "megaphone.fill", "📝": "note.text", "📱": "iphone", "🔞": "eye.slash.fill",
     ]
 
     static func systemSymbol(forEmoji emoji: String) -> String? {
@@ -155,7 +161,7 @@ extension RuleScheme {
         var regionGroups = Set<String>()
         let icons = Dictionary(groups.compactMap { group -> (String, String)? in
             guard ![.conditional, .relay, .unsupported].contains(group.kind) else { return nil }
-            let emoji = PolicyGroupEmoji.resolved(for: group.name, kind: group.kind)
+            let emoji = PolicyGroupEmoji.resolved(for: group, in: self)
             if PolicyGroupIconCatalog.countryCode(ofFlag: emoji) != nil {
                 guard !PolicyGroupIconSupport.regionIconsFromName.contains(target) else { return nil }
                 regionGroups.insert(group.name)

@@ -33,26 +33,104 @@ final class PolicyGroupIconTests: XCTestCase {
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "TikTok"), "🎵")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "OneDrive"), "Ⓜ️")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "AmazonPrimeVideo"), "🎬")
-        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Amazon"), "📦")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Amazon"), "🛒")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Google FCM"), "📢")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Google"), "🔍")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "YouTube Music"), "📹")
-        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "AI 平台"), "💬")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "AI 平台"), "🤖")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "国内媒体"), "🌏")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "全球直连"), "🎯")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Hong Kong"), "🇭🇰")
         XCTAssertEqual(PolicyGroupEmoji.recognized(for: "日本节点"), "🇯🇵")
         XCTAssertNil(PolicyGroupEmoji.recognized(for: "我的分组"))
+        // issue #47: these fell back to 🧩.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "影视节点"), "🎬")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "印亚马逊"), "🛒")
+        // A service still wins over its category.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "油管视频"), "📹")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "奈飞视频"), "🎥")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "亚马逊视频"), "🎬")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Gmail"), "🔍")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "学术网站"), "🎓")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Bank"), "🏦")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "动漫"), "📺")
         XCTAssertEqual(PolicyGroupEmoji.resolved(for: "我的分组", kind: .urlTest), "⚡️")
         XCTAssertEqual(PolicyGroupEmoji.resolved(for: "🦄 我的分组", kind: .select), "🦄")
     }
 
+    func testRegionsComeBeforeRolesAndRolesBeforeTheFallback() {
+        // Spellings from public configs that used to fall back.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "故障转移"), "🔁")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "负载均衡"), "⚖️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "延迟最低"), "♻️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "其他地区"), "🗺️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "全部节点"), "🌐")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "家宽节点"), "🏡")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Emby"), "🍿")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "X"), "🐦")
+        XCTAssertNil(PolicyGroupEmoji.recognized(for: "Xbox Cloud", regions: false).flatMap { $0 == "🐦" ? $0 : nil })
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Select"), "🎛️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Proxy Select"), "🚀")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "国内"), "🎯")
+        // A region in the name beats what the group does.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "香港故转"), "🇭🇰")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "日本-自动"), "🇯🇵")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "加坡节点"), "🇸🇬")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "欧洲节点"), "🇪🇺")
+        // A service beats a region.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "日本 Netflix"), "🎥")
+        XCTAssertEqual(PolicyGroupEmoji.fallback(for: .select), "🌐")
+        // Broad words never steal a more specific reading.
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "全球代理"), "🚀")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "自动测速"), "♻️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Others"), "🐟")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "微软云盘"), "Ⓜ️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "AI1"), "🤖")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Office365"), "Ⓜ️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "香港-Others"), "🇭🇰")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "香港测速"), "🇭🇰")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "网络测速"), "📶")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Google Cloud"), "☁️")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: "Google云盘"), "🔍")
+    }
+
+    func testRuleListsAndMembersSpeakForAVagueName() {
+        func scheme(_ groups: [RuleSchemeGroup], _ rulesets: [RuleSchemeRuleset]) -> RuleScheme {
+            RuleScheme(id: "t", name: "t", summary: "", sourceURLString: nil, groups: groups, rulesets: rulesets, isBundled: false)
+        }
+        func group(_ name: String, _ members: [RuleSchemeGroupMember]) -> RuleSchemeGroup {
+            RuleSchemeGroup(name: name, kind: .select, members: members, testURLString: nil, interval: nil, tolerance: nil)
+        }
+        func list(_ group: String, _ file: String) -> RuleSchemeRuleset {
+            RuleSchemeRuleset(groupName: group, resource: .remote(URL(string: "https://example.com/rules/\(file)")!))
+        }
+        let vague = group("我的分组", [.reference("节点选择")])
+        let netflix = scheme([vague], [list("我的分组", "Netflix.list")])
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: vague, in: netflix), "🎥")
+        let media = scheme([vague], [list("我的分组", "Netflix.list"), list("我的分组", "YouTube.yaml"), list("我的分组", "DisneyPlus.list")])
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: vague, in: media), "🎬", "several streaming services")
+        let china = scheme([vague], [list("我的分组", "ChinaDomain.list"), RuleSchemeRuleset(groupName: "我的分组", resource: .inline("GEOIP,CN"))])
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: vague, in: china), "🎯")
+        // The name still comes first.
+        let named = group("油管", [.reference("节点选择")])
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: named, in: scheme([named], [list("油管", "Netflix.list")])), "📹")
+
+        let empty = scheme([], [])
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: group("组 A", [.reference("DIRECT")]), in: empty), "🎯")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: group("组 B", [.reference("REJECT"), .reference("REJECT-DROP")]), in: empty), "🛑")
+        XCTAssertEqual(PolicyGroupEmoji.recognized(for: group("组 C", [.nodePattern("(?i)港|HK|Hong Kong")]), in: empty), "🇭🇰")
+        XCTAssertNil(PolicyGroupEmoji.recognized(for: group("组 D", [.nodePattern(".*")]), in: empty))
+        XCTAssertNil(PolicyGroupEmoji.recognized(for: group("组 E", [.reference("DIRECT"), .reference("节点选择")]), in: empty))
+        XCTAssertEqual(PolicyGroupEmoji.resolved(for: group("组 E", [.reference("节点选择")]), in: empty), "🌐")
+    }
+
     func testEveryRecognisedEmojiAndFallbackHasAnImage() {
         let catalog = PolicyGroupIconCatalog.bundled
-        let emoji = PolicyGroupEmoji.table.map(\.emoji)
+        let emoji = (PolicyGroupEmoji.table + PolicyGroupEmoji.roles + PolicyGroupEmoji.ruleLists).map(\.emoji)
             + [RuleSchemeGroup.Kind.select, .urlTest, .fallback, .loadBalance].map(PolicyGroupEmoji.fallback)
         for value in emoji {
             XCTAssertNotNil(catalog.url(forEmoji: value), value)
+            XCTAssertNotNil(catalog.circleURL(forEmoji: value), value)
         }
         let rocket = catalog.url(forEmoji: "🚀")?.absoluteString ?? ""
         XCTAssertTrue(rocket.hasPrefix("https://cdn.jsdelivr.net/gh/microsoft/fluentui-emoji@"), rocket)
@@ -160,7 +238,7 @@ final class PolicyGroupIconTests: XCTestCase {
     }
 
     func testEverySymbolExistsAndEveryEmojiTowerGivesHasOne() {
-        let emoji = PolicyGroupEmoji.table.map(\.emoji)
+        let emoji = (PolicyGroupEmoji.table + PolicyGroupEmoji.roles + PolicyGroupEmoji.ruleLists).map(\.emoji)
             + [RuleSchemeGroup.Kind.urlTest, .fallback, .loadBalance, .select].map(PolicyGroupEmoji.fallback(for:))
         for value in emoji {
             XCTAssertNotNil(PolicyGroupIconSupport.systemSymbol(forEmoji: value), value)

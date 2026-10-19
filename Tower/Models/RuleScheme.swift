@@ -505,7 +505,7 @@ struct RuleScheme: Identifiable, Codable, Hashable {
         // Only names something recognises; an unknown name keeps no emoji.
         let filled = Dictionary(groups.compactMap { group -> (String, String)? in
             guard PolicyGroupEmoji.leading(in: group.name) == nil,
-                  let emoji = PolicyGroupEmoji.recognized(for: group.name) else { return nil }
+                  let emoji = PolicyGroupEmoji.recognized(for: group, in: self) else { return nil }
             return (group.name, "\(emoji) \(group.name)")
         }, uniquingKeysWith: { first, _ in first })
         let taken = Set(groups.map(\.name))
