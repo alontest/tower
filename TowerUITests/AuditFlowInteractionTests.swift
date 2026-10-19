@@ -278,11 +278,13 @@ final class AuditFlowInteractionTests: XCTestCase {
     }
 
     private func launchPerformanceFixture(disableTabHaptics: Bool = false,
-                                          disableCardSwipe: Bool = false) -> XCUIApplication {
+                                          disableCardSwipe: Bool = false,
+                                          announcement: Bool = false) -> XCUIApplication {
         handleClipboardPermission()
         let app = XCUIApplication()
         app.launchEnvironment["TOWER_UI_TEST_RUN"] = UUID().uuidString
         app.launchEnvironment["TOWER_PERFORMANCE_NODE_COUNT"] = "1000"
+        if announcement { app.launchEnvironment["TOWER_FIXTURE_ANNOUNCEMENT"] = "1" }
         app.launchArguments = ["-hasSeenWelcome", "YES", "-AppleLanguages", "(zh-Hans)"]
         if disableTabHaptics { app.launchArguments.append("--disable-tab-haptics") }
         if disableCardSwipe { app.launchArguments.append("--disable-card-swipe") }
@@ -356,6 +358,36 @@ final class AuditFlowInteractionTests: XCTestCase {
         waitForExpectations(timeout: 3)
         Thread.sleep(forTimeInterval: 1)
         XCTAssertEqual(card.frame.minY, resting, accuracy: 0.5, "Collapsing the list must not move the card")
+    }
+
+    /// The announcement used to be the first row of the expanded list's lazy
+    /// stack; the page corrected for it and the card jumped 8 pt.
+    func testSubscriptionCardStaysStillWhileItsNodesExpandAndCollapse() {
+        let app = launchPerformanceFixture(announcement: true)
+        let expand = app.buttons["展开 云帆机场 的节点"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+        for _ in 0..<6 where !(expand.isHittable && expand.frame.minY < 330) {
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        XCTAssertTrue(expand.isHittable)
+        Thread.sleep(forTimeInterval: 1)
+        let resting = expand.frame.minY
+        expand.tap()
+        let collapse = app.buttons["收起 云帆机场 的节点"]
+        XCTAssertTrue(collapse.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["机场公告"].waitForExistence(timeout: 2))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(collapse.frame.minY, resting, accuracy: 0.5, "Expanding must not move the card")
+        collapse.tap()
+        XCTAssertTrue(expand.waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(expand.frame.minY, resting, accuracy: 0.5, "Collapsing must not move the card")
+        expand.tap()
+        XCTAssertTrue(collapse.waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(collapse.frame.minY, resting, accuracy: 0.5, "Expanding again must not move the card")
     }
 
     func testMapRegionCollapseKeepsSubscriptionTrafficAligned() {

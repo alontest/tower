@@ -1,5 +1,13 @@
 # 待办与待验证
 
+## 策略组图标（2026-10-19，未发布）
+
+- [x] 2026-10-19 国旗提交 `425b0a7` 已推送，清单已绑定，jsDelivr 回读 187 面一致。
+- [ ] App 代码与清单（本地未提交）。
+- [ ] 真机看图标：Surge iOS 策略组卡片、Surge Mac、Stash、Clash Verge、QuanX、Loon、Egern；确认 Loon 策略组的 `img-url`、Surge iOS 的 `icon-url` 实际生效。
+- [ ] FlClash、Mihomo Party、ClashMac、Clash Mi、名为 Clash 的 App 是否显示 `icon`；确认显示的加进 `PolicyGroupIconSupport.drawsIcons`。
+- [ ] 导入一份无 Emoji 的方案，确认自动补全的结果和菜单开关。
+
 ## 规则集扩展（2026-10-18，未发布）
 
 - [x] 2026-10-18 产物提交 `9da4e71` 已推送，清单已绑定并通过 `--verify-published`（207 个）。

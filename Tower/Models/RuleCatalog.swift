@@ -75,6 +75,27 @@ struct RuleCatalogEntry: Identifiable, Codable, Hashable {
         self.suggestedPolicyName = suggestedPolicyName
     }
 
+    private static let emojiTable: [PolicyGroupEmoji.Entry] = [
+        .init(emoji: "🤖", words: ["openai", "chatgpt"], phrases: []),
+        .init(emoji: "🔷", words: ["gemini", "bard"], phrases: []),
+        .init(emoji: "📹", words: ["youtube"], phrases: ["油管"]),
+        .init(emoji: "🎞️", words: ["netflix"], phrases: ["奈飞"]),
+        .init(emoji: "🧸", words: ["disney"], phrases: []),
+        .init(emoji: "🎥", words: ["primevideo", "amazonprime", "amazon video"], phrases: []),
+        .init(emoji: "🎦", words: ["hbo"], phrases: []),
+        .init(emoji: "✈️", words: ["telegram"], phrases: []),
+        .init(emoji: "🕊️", words: ["twitter"], phrases: []),
+        .init(emoji: "♾️", words: ["facebook", "instagram", "meta"], phrases: []),
+        .init(emoji: "🎵", words: ["tiktok"], phrases: []),
+        .init(emoji: "🟢", words: ["spotify"], phrases: []),
+        .init(emoji: "🍎", words: ["apple", "icloud", "testflight"], phrases: []),
+        .init(emoji: "🪟", words: ["microsoft", "onedrive", "office365"], phrases: []),
+        .init(emoji: "🔎", words: ["google", "firebase"], phrases: []),
+        .init(emoji: "🎮", words: ["steam", "epic", "playstation", "xbox", "game", "games", "gaming"], phrases: []),
+        .init(emoji: "🛑", words: ["advert", "advertising", "advertisement", "adblock", "reject"], phrases: ["广告"]),
+        .init(emoji: "🏠", words: ["lan", "private", "local"], phrases: ["局域网"]),
+    ]
+
     /// A semantic, deterministic emoji for every catalog item. Curated names
     /// get their familiar service symbol; the category fallback guarantees the
     /// complete upstream catalog is still visually scannable.
@@ -84,35 +105,13 @@ struct RuleCatalogEntry: Identifiable, Codable, Hashable {
             return String(first)
         }
 
-        let key = ([name] + aliases + [sourceURLString])
-            .joined(separator: " ")
-            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
-            .lowercased()
-
-        let mappings: [(needles: [String], emoji: String)] = [
-            (["openai", "chatgpt"], "🤖"),
-            (["gemini", "bard"], "🔷"),
-            (["youtube", "油管"], "📹"),
-            (["netflix", "奈飞", "奈飞"], "🎞️"),
-            (["disney"], "🧸"),
-            (["primevideo", "amazonprime", "amazon video"], "🎥"),
-            (["hbo", "max.list"], "🎦"),
-            (["telegram"], "✈️"),
-            (["twitter", "x.com"], "🕊️"),
-            (["facebook", "instagram", "meta"], "♾️"),
-            (["tiktok"], "🎵"),
-            (["spotify"], "🟢"),
-            (["apple", "icloud", "testflight"], "🍎"),
-            (["microsoft", "onedrive", "office365"], "🪟"),
-            (["google", "firebase", "youtube"], "🔎"),
-            (["steam", "epic", "playstation", "xbox", "game"], "🎮"),
-            (["advert", "adblock", "reject", "广告"], "🛑"),
-            (["lan", "private", "local", "局域网"], "🏠"),
-        ]
-        if let match = mappings.first(where: { mapping in
-            mapping.needles.contains(where: key.contains)
-        }) {
-            return match.emoji
+        // Catalog groups are named after this emoji (`🤖 OpenAI`), and saved
+        // and migrated flows depend on those names, so the values never change.
+        // Only the matching does: whole words of the name and aliases, never
+        // the URL (the old substring match gave AkamaiCloud Apple's 🍎).
+        let words = ([name] + aliases).map { (PolicyGroupEmoji.tokens($0), $0.lowercased()) }
+        for entry in Self.emojiTable where words.contains(where: { entry.matches(words: $0.0, lowered: $0.1) }) {
+            return entry.emoji
         }
 
         switch category {

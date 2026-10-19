@@ -463,7 +463,7 @@ final class RuleSetGenerationTests: XCTestCase {
         ).content
 
         XCTAssertTrue(
-            content.contains("GEOIP,CN,🎯 全球直连,no-resolve"),
+            content.contains("GEOIP,CN,\(exportedGroupName("🎯 全球直连", for: .surge)),no-resolve"),
             content
         )
         XCTAssertLessThan(
@@ -878,8 +878,9 @@ final class RuleSetGenerationTests: XCTestCase {
         // The DNS protection catch-all is the last remote list, not a local
         // rule that would beat every list.
         let filters = try XCTUnwrap(quanX.components(separatedBy: "[filter_remote]\n").last?.components(separatedBy: "\n\n").first)
-        XCTAssertTrue(filters.hasSuffix("Tower_catch_all_quanx.list, tag=tower-catch-all, force-policy=🐟 漏网之鱼, enabled=true"), filters)
-        XCTAssertTrue(quanX.contains("[filter_local]\nfinal, 🐟 漏网之鱼\n"), quanX)
+        let final = exportedGroupName("🐟 漏网之鱼", for: .quanx)
+        XCTAssertTrue(filters.hasSuffix("Tower_catch_all_quanx.list, tag=tower-catch-all, force-policy=\(final), enabled=true"), filters)
+        XCTAssertTrue(quanX.contains("[filter_local]\nfinal, \(final)\n"), quanX)
         XCTAssertFalse(quanX.lowercased().contains("no-resolve"), quanX)
 
         XCTAssertTrue(singBox.contains(#""format" : "binary""#), singBox)

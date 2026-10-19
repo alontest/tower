@@ -221,6 +221,9 @@ struct ConfigurationGenerator {
             }
             return adapted
         }
+        // After adaptation, before anything reads group names: where the
+        // client draws the icon, the name loses the emoji it stands for.
+        scheme = scheme.withPolicyGroupIcons(for: target)
         let supported = uniquedNames(
             nodes.filter {
                 writes(
@@ -572,17 +575,33 @@ struct ConfigurationGenerator {
         if target == .egern, group.parameters?["flatten"] == "true", let filter = group.parameters?["filter"] {
             output += "      filter: \(yaml(filter))\n"
         }
-        guard !options.isEmpty else { return }
+        let icon = policyGroupIcon(group, target: target)
+        guard !options.isEmpty || icon != nil else { return }
         if [.surge, .surgeMac, .loon, .quanx].contains(target) {
             if output.hasSuffix("\n") { output.removeLast() }
-            output += options.map { ", \($0.0)=\(confValue($0.1))" }.joined() + "\n"
+            output += options.map { ", \($0.0)=\(confValue($0.1))" }.joined()
+            if let icon { output += ", \([.surge, .surgeMac].contains(target) ? "icon-url" : "img-url")=\(confValue(icon))" }
+            output += "\n"
         } else {
             let indent = target == .egern ? "      " : "    "
             for (key, value) in options {
                 let scalar = ["exclude-filter", "exclude-type"].contains(key) ? yaml(value) : value
                 output += "\(indent)\(key): \(scalar)\n"
             }
+            if let icon { output += "\(indent)icon: \(yaml(icon))\n" }
         }
+    }
+
+    /// The image URL or SF Symbol set by `withPolicyGroupIcons`, for a client that takes one.
+    private func policyGroupIcon(_ group: ResolvedSchemeGroup, target: ClientTarget) -> String? {
+        guard PolicyGroupIconSupport.writesIcons.contains(target),
+              let icon = group.parameters?[PolicyGroupIconSupport.parameterKey] else { return nil }
+        if PolicyGroupIconSupport.circleIcons.contains(target),
+           icon.range(of: #"^[a-z0-9]+(\.[a-z0-9]+)*\.system$"#, options: .regularExpression) != nil {
+            return icon
+        }
+        guard let url = URL(string: icon), url.scheme == "https" else { return nil }
+        return url.absoluteString
     }
 
     private func orderedEgernPriorities(_ parameters: [String: String]?) -> [(String, String)]? {
@@ -670,7 +689,7 @@ struct ConfigurationGenerator {
             let supported = supportsPolicyKind(group, target: target)
             // Source structure and fields already represented by the model are
             // not raw output. Never copy arbitrary source options into another dialect.
-            let represented: Set<String> = ["name", "tag", "type", "proxies", "policies", "outbounds", "url", "latency_test_url", "interval", "check-interval", "tolerance", "algorithm", "strategy", "persistent", "raw-fields", "include-other-group", "include-all-proxies", "include-all", "policy-path", "policy-regex-filter", "server-tag-regex", "filter", "use", "urls", "update-interval", "update_interval", "icon", "hidden", "resource-tag-regex", "tower-source-bindings", "tower-source-tags", "tower-source-patterns"]
+            let represented: Set<String> = ["name", "tag", "type", "proxies", "policies", "outbounds", "url", PolicyGroupIconSupport.parameterKey, "latency_test_url", "interval", "check-interval", "tolerance", "algorithm", "strategy", "persistent", "raw-fields", "include-other-group", "include-all-proxies", "include-all", "policy-path", "policy-regex-filter", "server-tag-regex", "filter", "use", "urls", "update-interval", "update_interval", "icon", "hidden", "resource-tag-regex", "tower-source-bindings", "tower-source-tags", "tower-source-patterns"]
             let unhandled = (group.parameters ?? [:]).filter { key, value in
                 if ["resource-tag-regex", "server-tag-regex", "filter", "policy-regex-filter"].contains(key) { return (try? NSRegularExpression(pattern: value)) == nil }
                 if key == "tower-source-bindings" {
@@ -2117,6 +2136,7 @@ struct ConfigurationGenerator {
             if group.kind == .urlTest {
                 output += ", check-interval=\(group.interval), alive-checking=\(group.parameters?["alive-checking"] ?? "false"), tolerance=\(group.tolerance)"
             }
+            if let icon = policyGroupIcon(group, target: .quanx) { output += ", img-url=\(confValue(icon))" }
             output += "\n"
         }
         // Every module is emitted exactly once and in this order. Quantumult X

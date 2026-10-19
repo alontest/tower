@@ -126,7 +126,7 @@ final class RuleImportFidelityTests: XCTestCase {
         for target in [ClientTarget.clashMi, .surge, .loon, .singBox] {
             let result = output(scheme, target)
             XCTAssertFalse(result.hasInvalidPolicyReferences, "\(target): \(result.diagnostics)")
-            XCTAssertTrue(result.diagnostics.contains { $0.contains("🎥 奈飞节点") && $0.contains("不再引用") }, "\(target)")
+            XCTAssertTrue(result.diagnostics.contains { $0.contains(exportedGroupName("🎥 奈飞节点", for: target)) && $0.contains("不再引用") }, "\(target)")
         }
         let mihomo = output(scheme, .clashMi).content
         XCTAssertTrue(mihomo.contains("name: \"🎥 奈飞视频\"\n    type: select\n    proxies:\n      - \"🚀 节点选择\"\n      - \"DIRECT\""), mihomo)
@@ -135,7 +135,8 @@ final class RuleImportFidelityTests: XCTestCase {
         // A parent left with nothing falls back the same way.
         XCTAssertTrue(mihomo.contains("name: \"📦 仅奈飞\"\n    type: select\n    proxies:\n      - \"DIRECT\""), mihomo)
         let surge = output(scheme, .surge).content
-        XCTAssertTrue(surge.contains("🎥 奈飞视频 = select, 🚀 节点选择, DIRECT") || surge.contains("🎥 奈飞视频 = select,🚀 节点选择,DIRECT"), surge)
+        // Surge draws group icons, so the names carry no emoji there.
+        XCTAssertTrue(surge.contains("\n奈飞视频 = select, 节点选择, DIRECT"), surge)
     }
 
     // MARK: - DNS

@@ -709,6 +709,16 @@ private struct RuleCustomizationSheet: View {
                             Label(model.ruleGroupEmojisAreEnabled(for: scheme) ? "隐藏 Emoji" : "显示 Emoji", systemImage: "face.smiling")
                         }
                         .menuActionDismissBehavior(.enabled)
+                        // Imported schemes only: the bundled ones all carry emoji.
+                        if !scheme.isBundled, model.ruleGroupEmojisAreEnabled(for: scheme) {
+                            Button {
+                                toggleRuleGroupEmojiAutofillAfterMenuDismiss()
+                            } label: {
+                                Label(model.ruleGroupEmojiAutofillEnabled(for: scheme) ? "不再自动补全 Emoji" : "自动补全 Emoji",
+                                      systemImage: "wand.and.stars")
+                            }
+                            .menuActionDismissBehavior(.enabled)
+                        }
                         Button {
                             networkSettingsEditor = model.customizableScheme(for: scheme)
                         } label: {
@@ -837,6 +847,19 @@ private struct RuleCustomizationSheet: View {
         path = []
         draftGroupOrder = []
         model.resetRuleCustomization(for: scheme)
+    }
+
+    private func toggleRuleGroupEmojiAutofillAfterMenuDismiss() {
+        let enabled = !model.ruleGroupEmojiAutofillEnabled(for: scheme)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                model.setRuleGroupEmojiAutofill(enabled, for: scheme)
+            }
+        }
     }
 
     private func toggleRuleGroupEmojiVisibilityAfterMenuDismiss() {
@@ -1939,42 +1962,9 @@ private struct SaveCustomizedSchemeSheet: View {
 
 enum RulePolicyPresentation {
     static func emoji(for name: String, kind: RuleSchemeGroup.Kind, inferFromName: Bool = true) -> String {
-        if let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first,
-           isEmoji(first) {
-            return String(first)
-        }
+        if let leading = PolicyGroupEmoji.leading(in: name) { return leading }
         guard inferFromName else { return "" }
-        let key = nameWithoutLeadingEmoji(name).lowercased()
-        let mappings: [(needles: [String], emoji: String)] = [
-            (["节点选择", "proxy"], "🚀"),
-            (["手动切换", "manual"], "🎛️"),
-            (["自动选择", "url-test"], "♻️"),
-            (["全球直连", "direct"], "🎯"),
-            (["广告拦截", "reject"], "🛑"),
-            (["应用净化"], "🍃"),
-            (["漏网之鱼", "final"], "🐟"),
-            (["香港", "hong kong"], "🇭🇰"),
-            (["日本", "japan"], "🇯🇵"),
-            (["美国", "united states"], "🇺🇸"),
-            (["狮城", "新加坡", "singapore"], "🇸🇬"),
-            (["台湾", "taiwan"], "🇹🇼"),
-            (["韩国", "korea"], "🇰🇷"),
-            (["openai", "chatgpt", "ai 服务"], "🤖"),
-            (["gemini"], "🔷"),
-            (["telegram"], "✈️"),
-            (["youtube"], "📹"),
-            (["netflix", "奈飞"], "🎞️"),
-            (["disney"], "🧸"),
-            (["apple"], "🍎"),
-            (["microsoft"], "🪟"),
-            (["国外媒体", "流媒体"], "🌍"),
-        ]
-        if let match = mappings.first(where: { mapping in
-            mapping.needles.contains(where: key.contains)
-        }) {
-            return match.emoji
-        }
-        return kind == .urlTest ? "⚡️" : "🧩"
+        return PolicyGroupEmoji.recognized(for: name) ?? PolicyGroupEmoji.fallback(for: kind)
     }
 
     private static func isEmoji(_ character: Character) -> Bool {

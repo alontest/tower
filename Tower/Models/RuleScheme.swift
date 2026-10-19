@@ -496,19 +496,41 @@ struct RuleScheme: Identifiable, Codable, Hashable {
         return [parts[0].uppercased(), parts[1].lowercased()].joined(separator: ",")
     }
 
-    /// Hides decorative leading emoji without breaking the graph between policy
+    /// Hides decorative leading emoji, or with `autofill` adds a recognised
+    /// one where a group has none, without breaking the graph between policy
     /// groups and rules. Every declaration and reference is renamed together.
-    func withGroupEmojis(_ enabled: Bool) -> RuleScheme {
-        guard !enabled else { return self }
-
-        let candidates = groups.map { ($0.name, Self.removingLeadingEmoji(from: $0.name)) }
-        let counts = Dictionary(grouping: candidates, by: \.1).mapValues(\.count)
-        let names = Dictionary(candidates.map { original, candidate in
-            // Keep the source names when removing decoration would create an
-            // ambiguous group reference.
-            (original, counts[candidate] == 1 ? candidate : original)
+    func withGroupEmojis(_ enabled: Bool, autofill: Bool = false) -> RuleScheme {
+        guard enabled else { return renamingGroups(Self.withoutEmoji(groups.map(\.name))) }
+        guard autofill else { return self }
+        // Only names something recognises; an unknown name keeps no emoji.
+        let filled = Dictionary(groups.compactMap { group -> (String, String)? in
+            guard PolicyGroupEmoji.leading(in: group.name) == nil,
+                  let emoji = PolicyGroupEmoji.recognized(for: group.name) else { return nil }
+            return (group.name, "\(emoji) \(group.name)")
         }, uniquingKeysWith: { first, _ in first })
+        let taken = Set(groups.map(\.name))
+        return renamingGroups(filled.filter { !taken.contains($0.value) })
+    }
 
+    /// For clients that draw a group's icon themselves: names without their
+    /// leading emoji, and the emoji each renamed group had, by new name.
+    func withoutGroupEmojis(only selected: Set<String>? = nil) -> (scheme: RuleScheme, renamed: [String: String]) {
+        let names = Self.withoutEmoji(groups.map(\.name)).filter { selected?.contains($0.key) ?? true }
+        return (renamingGroups(names), names)
+    }
+
+    /// Removing decoration that would leave two groups with one name keeps
+    /// both source names instead, so no reference becomes ambiguous.
+    private static func withoutEmoji(_ names: [String]) -> [String: String] {
+        let candidates = names.map { ($0, removingLeadingEmoji(from: $0)) }
+        let counts = Dictionary(grouping: candidates, by: \.1).mapValues(\.count)
+        return Dictionary(candidates.compactMap { original, candidate in
+            counts[candidate] == 1 && candidate != original ? (original, candidate) : nil
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func renamingGroups(_ names: [String: String]) -> RuleScheme {
+        guard !names.isEmpty else { return self }
         func renamed(_ name: String) -> String { names[name] ?? name }
 
         var result = self
@@ -528,11 +550,16 @@ struct RuleScheme: Identifiable, Codable, Hashable {
                 algorithm: group.algorithm,
                 sourceType: group.sourceType,
                 sourceFormat: group.sourceFormat,
-                parameters: group.renamedParameters(using: renamed)
+                parameters: group.renamedParameters(using: renamed),
+                isCustomNodeFilter: group.isCustomNodeFilter
             )
         }
         result.rulesets = rulesets.map {
-            RuleSchemeRuleset(groupName: renamed($0.groupName), resource: $0.resource, options: $0.options, provider: $0.provider)
+            var ruleset = RuleSchemeRuleset(groupName: renamed($0.groupName), resource: $0.resource,
+                                            options: $0.options, provider: $0.provider)
+            // Display-only, but the exporter groups a library rule set by it.
+            ruleset.origin = $0.origin
+            return ruleset
         }
         return result
     }

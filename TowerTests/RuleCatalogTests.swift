@@ -556,8 +556,9 @@ final class RuleCatalogTests: XCTestCase {
 
     func testChineseNetflixPolicyUsesStreamingEmoji() {
         XCTAssertEqual(
+            // Shown only, never saved: the same emoji as ACL4SSR's 🎥 奈飞视频.
             RulePolicyPresentation.emoji(for: "奈飞视频", kind: .select),
-            "🎞️"
+            "🎥"
         )
     }
 

@@ -198,6 +198,10 @@ final class AppModel {
     /// Missing means follow the source and show its emoji. Only explicit
     /// overrides are persisted so newly imported schemes retain their design.
     var ruleGroupEmojisEnabled: [String: Bool] = [:]
+    /// Schemes whose groups without an emoji get a recognised one. Only `true`
+    /// is stored: on for new imports, off for schemes that existed before, so
+    /// renaming never changes a client's selected groups without a choice.
+    var ruleGroupEmojiAutofill: [String: Bool] = [:]
     var excludedNodeIDs: Set<UUID> = [] {
         didSet { nodeSelectionCache = nil }
     }
@@ -302,6 +306,7 @@ final class AppModel {
         let groups: [String: Set<String>]
         let customizations: [String: RuleSchemeCustomization]
         let emojis: [String: Bool]
+        let emojiAutofill: [String: Bool]
         let flows: [CustomRuleFlow]
         let tailnets: [TailnetConnection]
         let tailnetKeyRevision: Int
@@ -437,6 +442,7 @@ final class AppModel {
         let counts: RuleCountInputs
         let selectedGroups: [String: Set<String>]
         let emojis: [String: Bool]
+        let emojiAutofill: [String: Bool]
     }
     @ObservationIgnored private var rulePresentationInputs: RulePresentationInputs?
 
@@ -445,7 +451,8 @@ final class AppModel {
             counts: RuleCountInputs(schemes: importedSchemes, customizations: ruleSchemeCustomizations,
                                     flows: customRuleFlows, localRuleSets: localRuleSets),
             selectedGroups: selectedRuleGroups,
-            emojis: ruleGroupEmojisEnabled
+            emojis: ruleGroupEmojisEnabled,
+            emojiAutofill: ruleGroupEmojiAutofill
         )
     }
 
@@ -559,11 +566,20 @@ final class AppModel {
                         )
                     }
                     let kinds: [ProxyKind] = [.shadowsocks, .trojan, .vmess, .vless, .hysteria2, .anytls]
+                    // Like a real airport: an announcement above the nodes, and
+                    // names that say nothing about where a node is.
+                    let realShape = ProcessInfo.processInfo.environment["TOWER_FIXTURE_ANNOUNCEMENT"] == "1"
+                    if realShape {
+                        snapshot.subscriptions[0].usage?.notices = [
+                            "官网：example.invalid，请收藏备用地址。",
+                            "本月起流量每月 1 号重置，到期前 3 天会邮件提醒，节点异常请在群里反馈。"
+                        ]
+                    }
                     snapshot.nodes = (0..<count).map { index in
                         ProxyNode(sourceID: index < count - count / 25
                                     ? snapshot.subscriptions[(index / regions.count) % sourceCount].id : nil,
                                   kind: kinds[(index / regions.count) % kinds.count],
-                                  name: "\(regions[index % regions.count]) · Perf \(index)",
+                                  name: realShape ? "Node \(index) · IEPL" : "\(regions[index % regions.count]) · Perf \(index)",
                                   server: "192.0.2.1", port: 443,
                                   cipher: "chacha20-ietf-poly1305", password: "fixture",
                                   uuid: "5d1c3d8f-77b7-45c7-98c7-6fa54d37766e", tls: true, rawURI: "ss://fixture")
@@ -1009,6 +1025,7 @@ final class AppModel {
         selectedRuleGroups[scheme.id] = nil
         ruleSchemeCustomizations[scheme.id] = nil
         ruleGroupEmojisEnabled[scheme.id] = nil
+        ruleGroupEmojiAutofill[scheme.id] = nil
         customRuleFlows.removeAll { $0.schemeID == scheme.id }
         showToast(
             String(localized: "已恢复初始规则"),
@@ -1035,6 +1052,7 @@ final class AppModel {
         if !ruleGroupEmojisAreEnabled(for: scheme) {
             ruleGroupEmojisEnabled[saved.id] = false
         }
+        ruleGroupEmojiAutofill[saved.id] = ruleGroupEmojiAutofill[scheme.id]
         selectedPresetID = saved.id
         persist()
         return saved
@@ -1063,6 +1081,7 @@ final class AppModel {
     ) throws -> RuleScheme {
         let previousSelection = selectedRuleGroups[scheme.id]
         let previousEmojiPreference = ruleGroupEmojisEnabled[scheme.id]
+        let previousAutofill = ruleGroupEmojiAutofill[scheme.id]
         let disabledFlows = customRuleFlows.filter {
             $0.schemeID == scheme.id && !$0.isEnabled
         }
@@ -1101,6 +1120,7 @@ final class AppModel {
         }
         ruleSchemeCustomizations[saved.id] = nil
         ruleGroupEmojisEnabled[saved.id] = previousEmojiPreference
+        ruleGroupEmojiAutofill[saved.id] = previousAutofill
 
         // Enabled flows are already materialized into the editable graph and
         // therefore into `saved`; retaining them would emit every rule twice.
@@ -1127,6 +1147,15 @@ final class AppModel {
 
     func ruleGroupEmojisAreEnabled(for scheme: RuleScheme) -> Bool {
         ruleGroupEmojisEnabled[scheme.id] ?? true
+    }
+
+    func ruleGroupEmojiAutofillEnabled(for scheme: RuleScheme) -> Bool {
+        ruleGroupEmojiAutofill[scheme.id] ?? false
+    }
+
+    func setRuleGroupEmojiAutofill(_ enabled: Bool, for scheme: RuleScheme) {
+        ruleGroupEmojiAutofill[scheme.id] = enabled ? true : nil
+        persist()
     }
 
     func setRuleGroupEmojisEnabled(_ enabled: Bool, for scheme: RuleScheme) {
@@ -1787,7 +1816,8 @@ final class AppModel {
 
     func effectiveScheme(_ scheme: RuleScheme) -> RuleScheme {
         materializedScheme(scheme)
-            .withGroupEmojis(ruleGroupEmojisAreEnabled(for: scheme))
+            .withGroupEmojis(ruleGroupEmojisAreEnabled(for: scheme),
+                             autofill: ruleGroupEmojiAutofillEnabled(for: scheme))
     }
 
     /// True once every list a scheme references is available locally.
@@ -1830,6 +1860,8 @@ final class AppModel {
         try Task.checkCancellation()
         guard ruleOperationGeneration == generation, ruleImportToken == token else { throw CancellationError() }
         importedSchemes.append(result.scheme)
+        // New imports get recognised emoji filled in; see ruleGroupEmojiAutofill.
+        ruleGroupEmojiAutofill[result.scheme.id] = true
         selectedPresetID = result.scheme.id
         persist()
 
@@ -1909,6 +1941,7 @@ final class AppModel {
         selectedRuleGroups[scheme.id] = nil
         ruleSchemeCustomizations[scheme.id] = nil
         ruleGroupEmojisEnabled[scheme.id] = nil
+        ruleGroupEmojiAutofill[scheme.id] = nil
         customRuleFlows.removeAll { $0.schemeID == scheme.id }
         let retainedURLs = Set(
             ruleSchemes.flatMap { effectiveScheme($0).remoteRulesetURLs }
@@ -3407,7 +3440,8 @@ final class AppModel {
         let inputs = RequestInputs(nodes: nodes, sources: subscriptions, excludedNodes: excludedNodeIDs,
             nameFilter: nodeExportNameFilter,
             countryCodes: nodeIPCountryCodes, schemes: importedSchemes, groups: selectedRuleGroups,
-            customizations: ruleSchemeCustomizations, emojis: ruleGroupEmojisEnabled, flows: customRuleFlows,
+            customizations: ruleSchemeCustomizations, emojis: ruleGroupEmojisEnabled,
+            emojiAutofill: ruleGroupEmojiAutofill, flows: customRuleFlows,
             tailnets: tailnets, tailnetKeyRevision: tailnetAuthKeyRevision,
             excludedKinds: excludedKinds, presetID: selectedPresetID, name: configurationName,
             appendName: appendSubscriptionNameToNodes, filterInfo: filterSubscriptionInfoNodes,
@@ -4246,6 +4280,7 @@ final class AppModel {
             )
         }
         ruleGroupEmojisEnabled = snapshot.ruleGroupEmojisEnabled ?? [:]
+        ruleGroupEmojiAutofill = snapshot.ruleGroupEmojiAutofill ?? [:]
         excludedNodeIDs = Set(snapshot.excludedNodeIDs ?? [])
         nodeExportNameFilter = snapshot.nodeExportNameFilter
         let catalogMigratedFlows = migrateLegacyCatalogRuleFlows(snapshot.customRuleFlows ?? [])
@@ -4456,6 +4491,9 @@ final class AppModel {
             ruleGroupEmojisEnabled: ruleGroupEmojisEnabled.isEmpty
                 ? nil
                 : ruleGroupEmojisEnabled,
+            ruleGroupEmojiAutofill: ruleGroupEmojiAutofill.isEmpty
+                ? nil
+                : ruleGroupEmojiAutofill,
             excludedNodeIDs: excludedNodeIDs.isEmpty
                 ? nil
                 : excludedNodeIDs.sorted { $0.uuidString < $1.uuidString },

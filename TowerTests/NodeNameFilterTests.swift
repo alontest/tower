@@ -324,7 +324,7 @@ final class NodeNameFilterTests: XCTestCase {
             return try XCTUnwrap(content.components(separatedBy: "proxy-groups:").dropFirst().first)
                 .components(separatedBy: "rules:").first ?? ""
         case .surge:
-            return try XCTUnwrap(content.components(separatedBy: "\n").first { $0.hasPrefix(groupName + " = ") })
+            return try XCTUnwrap(content.components(separatedBy: "\n").first { $0.hasPrefix(exportedGroupName(groupName, for: .surge) + " = ") })
         case .singBox:
             let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any])
             let groups = try XCTUnwrap(document["outbounds"] as? [[String: Any]])

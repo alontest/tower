@@ -92,6 +92,12 @@ python3 Scripts/update_acl4ssr_rules.py --revision <完整提交号> \
   --sing-box-version 1.14.2
 ```
 
+## 策略组图标
+
+`Scripts/update_policy_group_icons.py` 生成两样东西：`Tower/Resources/PolicyGroupIcons/PolicyGroupIcons_manifest.json`（Fluent Emoji 3D 的 Emoji → 图片路径索引，随 App 打包，图片本身由客户端从 jsDelivr 的固定提交读取）、`Rulesets/PolicyGroupIcons/<flag-icons 提交号>/` 下 187 张圆形国旗 PNG，以及 `Rulesets/PolicyGroupIcons/FluentCircle/` 下给 QuanX 的 144px 圆底图标（全部 Fluent Emoji 加 187 面国旗，约 17 MB，从 raw.githubusercontent.com 读取）。必须显式传入 `--rsvg <rsvg-convert 路径>`。
+
+国旗和规则集一样分两个提交发布：先不带 `--artifact-commit` 生成（清单里的国旗地址指向 `main`，App 只用 Fluent、地区组不写图标），只提交并推送 `Rulesets/PolicyGroupIcons/`；再用该提交号 `--artifact-commit <提交号>` 重新生成清单，提交 App 端，最后用 `--verify-published` 回读每一面国旗的 SHA-256。圆底图标同样两步：先推送 `Rulesets/PolicyGroupIcons/FluentCircle/`，再用 `--circle-commit <提交号>`（同时带上国旗的 `--artifact-commit`，否则国旗地址会退回 `main`）重新生成清单；未绑定时 QuanX 写 SF Symbols。`--verify-published` 会一起回读两组图片。
+
 ## 本地配置
 
 本仓库是公开的，所以构建机地址、它的仓库路径和 Apple 团队 ID 都不写进 Git。远程发布需要的私有值放在 `Config/release.local.sh`；该文件已被 `.gitignore` 忽略，每台机器只填写自己需要的项目：

@@ -1897,6 +1897,9 @@ struct AppSnapshot: Codable {
     /// Whether imported policy-group names keep their decorative leading emoji,
     /// keyed by scheme id. Missing entries preserve the source appearance.
     var ruleGroupEmojisEnabled: [String: Bool]?
+    /// Schemes whose groups without an emoji get a recognised one, keyed by
+    /// scheme id. New imports are on; schemes from before are off.
+    var ruleGroupEmojiAutofill: [String: Bool]?
     /// Nodes explicitly excluded from generated configurations. Optional keeps
     /// snapshots written before per-node selection backward compatible.
     var excludedNodeIDs: [UUID]?
@@ -1983,6 +1986,7 @@ struct AppSnapshot: Codable {
         selectedRuleGroups: [String: [String]]? = nil,
         ruleSchemeCustomizations: [String: RuleSchemeCustomization]? = nil,
         ruleGroupEmojisEnabled: [String: Bool]? = nil,
+        ruleGroupEmojiAutofill: [String: Bool]? = nil,
         excludedNodeIDs: [UUID]? = nil,
         nodeExportNameFilter: NodeExportNameFilter? = nil,
         customRuleFlows: [CustomRuleFlow]? = nil,
@@ -2020,6 +2024,7 @@ struct AppSnapshot: Codable {
         self.selectedRuleGroups = selectedRuleGroups
         self.ruleSchemeCustomizations = ruleSchemeCustomizations
         self.ruleGroupEmojisEnabled = ruleGroupEmojisEnabled
+        self.ruleGroupEmojiAutofill = ruleGroupEmojiAutofill
         self.excludedNodeIDs = excludedNodeIDs
         self.nodeExportNameFilter = nodeExportNameFilter
         self.customRuleFlows = customRuleFlows

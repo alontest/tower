@@ -57,6 +57,15 @@ App 和本仓库不再包含 Self-Configuration 的配置、规则列表或图�
 
 节点地区识别用的中英文国名、别名和标注坐标由该数据集生成。生成的是源码而不是资源文件，因为它只有几百行常量、需要在代码评审里看见 diff，也省掉一次启动时的文件读取。Natural Earth 的 110m 精度会略掉香港、新加坡、澳门这类小面积地区，脚本里按名单单独补齐。
 
+## 策略组图标
+
+- **Emoji 图片**：Microsoft Fluent Emoji 3D，https://github.com/microsoft/fluentui-emoji ，固定版本 `1ffb34c752ecf5d402f04cfb4b392c77f57c54bc`，MIT 许可。
+- **国旗**：flag-icons（1x1 方形版），https://github.com/lipis/flag-icons ，固定版本 `ac7e0eb3259eb62aa6100c435607e2fe03896a97`，MIT 许可。
+- **本地路径**：`Tower/Resources/PolicyGroupIcons/`（只有 Emoji → 图片路径的索引与 NOTICE，不含任何图片）
+- **托管派生资源**：`Rulesets/PolicyGroupIcons/<flag-icons 版本>/`（187 张圆形国旗 PNG）和 `Rulesets/PolicyGroupIcons/FluentCircle/`（给 Quantumult X 的全部 Fluent 3D 圆底 PNG 和 187 张 144×144 圆形国旗），都不随 App 打包
+
+导出配置时，塔台把策略组 Emoji 对应的 Fluent 3D 图片地址（jsDelivr 上的固定版本）写进支持图标的客户端，不打包、不转存这些图片。国旗由 flag-icons 的 SVG 裁成圆形、加一圈极淡的描边后渲染为 256×256 PNG，图形本身未修改。Quantumult X 的圆底图标是 Fluent 3D 原图缩放后放在浅色圆形底上、渲染为 144×144 PNG，Emoji 图形本身未修改。三者都不适用塔台源码的 MIT 许可声明之外的条款，仍按各自 MIT 许可分发。生成脚本：`Scripts/update_policy_group_icons.py`。
+
 ## 客户端 App 图标
 
 导出页用各客户端的 App Store 图标标识目标，随 App 打包在 `Tower/Assets.xcassets/Client*.imageset/`：

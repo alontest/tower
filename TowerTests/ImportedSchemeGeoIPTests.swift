@@ -55,10 +55,10 @@ final class ImportedSchemeGeoIPTests: XCTestCase {
             }
 
             if target == .quanx {
-                let finalGroup = try XCTUnwrap(scheme.finalGroupName)
+                let finalGroup = exportedGroupName(try XCTUnwrap(scheme.finalGroupName), for: .quanx)
                 XCTAssertFalse(content.lowercased().contains("no-resolve"), content)
                 XCTAssertTrue(
-                    content.localizedCaseInsensitiveContains("geoip, cn, 🎯 全球直连"),
+                    content.localizedCaseInsensitiveContains("geoip, cn, \(exportedGroupName("🎯 全球直连", for: .quanx))"),
                     content
                 )
                 XCTAssertTrue(

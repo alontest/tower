@@ -104,7 +104,8 @@ final class RuleSetReferenceTests: XCTestCase {
         XCTAssertTrue(generate(scheme, .clash).contains("  tower-local-1:\n    type: inline\n    behavior: domain"), "Stash")
 
         let surge = generate(scheme, .surge)
-        XCTAssertTrue(surge.contains("\n[Rule]\nRULE-SET,tower-local-1,🚀 节点选择\nRULE-SET,tower-local-2,🎯 全球直连,no-resolve\nRULE-SET,tower-local-3,🛑 广告拦截\n"), surge)
+        // Surge draws each group's icon, so names carry no emoji there.
+        XCTAssertTrue(surge.contains("\n[Rule]\nRULE-SET,tower-local-1,节点选择\nRULE-SET,tower-local-2,全球直连,no-resolve\nRULE-SET,tower-local-3,广告拦截\n"), surge)
         XCTAssertTrue(surge.contains("[Ruleset tower-local-1]\nDOMAIN-SUFFIX,example.com\nDOMAIN,api.example.org\n"))
         XCTAssertTrue(surge.contains("[Ruleset tower-local-2]\nIP-CIDR,203.0.113.0/24\nIP-CIDR6,2001:db8::/32\n"))
         XCTAssertTrue(generate(scheme, .surgeMac).contains("[Ruleset tower-local-3]\nDOMAIN-KEYWORD,tracker\n"))
@@ -115,7 +116,7 @@ final class RuleSetReferenceTests: XCTestCase {
         // mihomo keeps an IP rule resolving unless the source said otherwise.
         XCTAssertTrue(generate(scheme, .clashMi).contains("  - RULE-SET,tower-local-1,🎯 全球直连\n"))
         // Surge writes no-resolve on every IP rule.
-        XCTAssertTrue(generate(scheme, .surge).contains("RULE-SET,tower-local-1,🎯 全球直连,no-resolve\n"))
+        XCTAssertTrue(generate(scheme, .surge).contains("RULE-SET,tower-local-1,全球直连,no-resolve\n"))
 
         let mixed = try self.scheme(adding: library(["IP-CIDR,198.51.100.0/24", "IP-CIDR,192.0.2.0/24,no-resolve"], group: "🎯 全球直连"))
         XCTAssertFalse(generate(mixed, .clashMi).contains("tower-local-"), "one rule each side is no set")

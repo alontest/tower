@@ -1,0 +1,27 @@
+Policy group icons
+==================
+
+Emoji images: Microsoft Fluent Emoji, 3D style
+Source URL:   https://github.com/microsoft/fluentui-emoji
+Revision:     1ffb34c752ecf5d402f04cfb4b392c77f57c54bc
+License:      MIT
+
+Circles:      the same Fluent 3D images for Quantumult X, each on a pale
+              circle of its own hue, rendered to 144x144 PNG under
+              Rulesets/PolicyGroupIcons/FluentCircle/ (MIT, as Fluent), next
+              to the round flags below at the same size (MIT, as flag-icons)
+
+Flags:        flag-icons, 1x1
+Source URL:   https://github.com/lipis/flag-icons
+Revision:     ac7e0eb3259eb62aa6100c435607e2fe03896a97
+License:      MIT
+
+PolicyGroupIcons_manifest.json maps each emoji to its Fluent 3D image path at
+the revision above; Tower writes the CDN URL of that image into exported
+profiles and never bundles or rehosts the images. The round flags are the
+flag-icons 1x1 SVGs clipped to a circle with a hairline edge and rendered to
+256x256 PNG; they are published under Rulesets/PolicyGroupIcons/
+and remain under the MIT license of flag-icons. Neither is covered by the MIT
+license of Tower's own source code; see THIRD-PARTY-NOTICES.md.
+Regenerate with: python3 Scripts/update_policy_group_icons.py --rsvg <rsvg-convert>
+  --artifact-commit <flags commit> --circle-commit <circles commit>

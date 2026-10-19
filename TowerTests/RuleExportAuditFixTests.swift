@@ -60,7 +60,7 @@ final class RuleExportAuditFixTests: XCTestCase {
                 XCTAssertTrue(defined.contains(name) || ["DIRECT", "REJECT"].contains(name), "\(name) in \(line)")
             }
         }
-        let hongKongGroup = try XCTUnwrap(content.components(separatedBy: "\n").first { $0.hasPrefix("🇭🇰 香港节点 = ") })
+        let hongKongGroup = try XCTUnwrap(content.components(separatedBy: "\n").first { $0.hasPrefix(exportedGroupName("🇭🇰 香港节点", for: .surge) + " = ") })
         XCTAssertTrue(hongKongGroup.contains("🇭🇰 香港 01"), hongKongGroup)
     }
 

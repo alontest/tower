@@ -69,6 +69,7 @@ ConfigurationGenerator 按 ClientTarget 与能力矩阵输出 INI / YAML / JSON 
 - 分流规则按条件树转换方言（`RoutingRuleCapabilities`）：Surge、mihomo 系、Stash、Loon、Shadowrocket 共用这一套，每个目标只输出自己文档列出的规则类型和选项，选项写在策略名后面；sing-box 和 Egern 有各自基于同一条件树的写法；QuanX 仍走 `mappedRule` 的逐字段路径。不能表达的规则跳过并提示；拦截规则被跳过时，在提示最前面汇总条数，不阻止导出。MRS 规则集不下载、不解码，只给 mihomo 系远程引用。
 - Loon 和 QuanX 先匹配本地规则、再匹配远程列表，规划器会把排在本地规则前面的远程列表改为内联。
 - 名称必须转义，不能让不可信 remark 注入规则。
+- 策略组图标：`PolicyGroupEmoji` 是唯一的 Emoji 识别器（名字自带 → 按词识别服务 → 地区 → 类型兜底）；`RuleScheme.withPolicyGroupIcons` 在生成时把它换成 Fluent Emoji 3D 或圆形国旗的地址，写在 `tower-icon` 参数里，由各格式输出为 `icon-url` / `icon` / `img-url`；能画图标的客户端同时去掉名字里的 Emoji，所有引用一起改名。地区组名字保留国旗 Emoji，同时写圆形国旗图标（Surge 除外，`regionIconsFromName`）；QuanX 用塔台发布的 144px 圆底图（`PolicyGroupIconCatalog.circleURL`，raw.githubusercontent.com），覆盖全部 Fluent Emoji 和国旗；未发布前写 SF Symbols（`<名称>.system`），只覆盖 `PolicyGroupIconSupport.symbols` 的键，其余保留名字里的 Emoji。导入方案的「自动补全 Emoji」（`ruleGroupEmojiAutofill`）只对新导入的默认开启。
 - 代理集合仅为明确支持的完整配置传入 RemoteSubscriptionLink，自有节点内联。
 - Tailscale 内网（`TailnetConnection`）不是节点：
   - `TailnetConfigurationWriter` 在生成之后，把它写进完整配置：一个不被任何组引用的策略，加上置顶规则。内置方案和导入方案共用这一处。

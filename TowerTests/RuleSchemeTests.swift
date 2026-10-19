@@ -620,7 +620,7 @@ final class RuleSchemeTests: XCTestCase {
             ).content
 
             XCTAssertTrue(
-                content.contains("GEOSITE,CN,🎯 全球直连"),
+                content.contains("GEOSITE,CN,\(exportedGroupName("🎯 全球直连", for: target))"),
                 "\(target.name) 漏掉了导入 ini 中的 GEOSITE：\(content)"
             )
         }
@@ -646,7 +646,7 @@ final class RuleSchemeTests: XCTestCase {
             ).content
 
             for group in scheme.groups {
-                XCTAssertTrue(content.contains(group.name), "\(target.name) 缺少策略组 \(group.name)")
+                XCTAssertTrue(content.contains(exportedGroupName(group.name, for: target)), "\(target.name) 缺少策略组 \(group.name)")
             }
         }
     }
@@ -660,7 +660,7 @@ final class RuleSchemeTests: XCTestCase {
         ).content
 
         let regionBlock = try XCTUnwrap(
-            content.components(separatedBy: "  - name: \"🇭🇰 香港节点\"").last?
+            content.components(separatedBy: "  - name: \"\(exportedGroupName("🇭🇰 香港节点", for: .clash))\"").last?
                 .components(separatedBy: "  - name:").first
         )
         XCTAssertTrue(regionBlock.contains("HK 香港 01"), regionBlock)
@@ -676,7 +676,7 @@ final class RuleSchemeTests: XCTestCase {
         ).content
 
         let line = try XCTUnwrap(
-            content.components(separatedBy: .newlines).first { $0.hasPrefix("url-latency-benchmark=♻️ 自动选择") }
+            content.components(separatedBy: .newlines).first { $0.hasPrefix("url-latency-benchmark=\(exportedGroupName("♻️ 自动选择", for: .quanx))") }
         )
         XCTAssertTrue(line.contains(", HK 香港 01, JP Tokyo 02,"), line)
         XCTAssertFalse(line.contains("server-tag-regex="), line)
@@ -716,7 +716,8 @@ final class RuleSchemeTests: XCTestCase {
                 scheme: scheme,
                 target: target
             ).content
-            XCTAssertTrue(content.contains(rule), "\(target.name) 缺少兜底规则")
+            let name = exportedGroupName("🐟 漏网之鱼", for: target)
+            XCTAssertTrue(content.contains(rule.replacingOccurrences(of: "🐟 漏网之鱼", with: name)), "\(target.name) 缺少兜底规则")
         }
     }
 

@@ -95,6 +95,10 @@ final class LocalSchemeImportTests: XCTestCase {
         let restored = AppModel(persistence: persistence, arguments: [])
         XCTAssertEqual(restored.importedSchemes.first?.name, "Local")
         XCTAssertEqual(restored.selectedPresetID, model.importedSchemes.first?.id)
+        // New imports fill in recognised emoji; it survives a relaunch.
+        let imported = try XCTUnwrap(model.importedSchemes.first)
+        XCTAssertTrue(model.ruleGroupEmojiAutofillEnabled(for: imported))
+        XCTAssertTrue(restored.ruleGroupEmojiAutofillEnabled(for: imported))
     }
 
     func testInvalidBinaryEmptyAndOversizedInputAreRejected() async throws {
