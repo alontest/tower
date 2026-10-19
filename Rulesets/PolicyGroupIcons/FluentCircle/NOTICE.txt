@@ -8,7 +8,8 @@ License:      MIT
 
 Circles:      the same Fluent 3D images for Quantumult X, each on a pale
               circle of its own hue, rendered to 144x144 PNG under
-              Rulesets/PolicyGroupIcons/FluentCircle/ (MIT, as Fluent)
+              Rulesets/PolicyGroupIcons/FluentCircle/ (MIT, as Fluent), next
+              to the round flags below at the same size (MIT, as flag-icons)
 
 Flags:        flag-icons, 1x1
 Source URL:   https://github.com/lipis/flag-icons
