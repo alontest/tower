@@ -4,6 +4,9 @@
 
 - 用户要求推送 TestFlight、只递增 Build 号，并更新 GitHub 版本；纳入下方 issue #47 的策略组 Emoji 识别重做。GitHub 上同一版本号此前没有发过两次，经用户选择新建 Release `v1.0.30-71`，v1.0.30（70）原样保留；Homebrew cask 的下载 tag 改为「版本-构建号」。
 - 发布前检查：本地化、发布脚本测试通过，内置 ACL4SSR 仍是上游最新，207 个规则产物和 187 面国旗、1,780 个 QuanX 圆底图标回读一致；完整 TowerTests 已在同一代码 `58b4341` 上 1,367 项零失败。
+- 发布源码 `d75da0c` 已推送。本机 M4 归档两端，核对 `com.jzb.tower` 1.0.30（71），Mac 为 arm64 / x86_64；导出仍用 asc 的 API Key 云签名。asc 上传两端：测试说明不能含 Emoji（App Store Connect 拒收 🌐 🤖），改成文字后上传成功，Apple 处理均为 VALID。外部组「测试」提交 Beta 审核：iOS 立即 APPROVED、IN_BETA_TESTING；Mac 为 WAITING_FOR_BETA_REVIEW。私有归档与回执在 `~/Builds/Tower-1.0.30-71/`。
+- Mac 直接分发：Developer ID 导出并公证（第二次取回成功），签名、公证票据、Gatekeeper、双架构与 DMG 挂载复核通过。GitHub [v1.0.30-71](https://github.com/pengchujin/tower/releases/tag/v1.0.30-71)（tag 指向 `d75da0c`）已公开并设为 Latest，公开回下载 SHA-256 一致：`10e78d9f33e5f178d435eab5e4abf42e2081e76b29f28c58e9f7d35c1d8ee7c1`。
+- README 下载入口改为 v1.0.30-71；Homebrew cask 更新为 1.0.30,71，下载 tag 改为 `v#{version.csv.first}-#{version.csv.second}`（以后若回到 `vX.Y.Z` tag，cask 要同步改回）。brew style / audit 通过，本机 `brew upgrade --cask` 后为 1.0.30（71），严格签名、Gatekeeper、公证票据通过；主界面正常显示，退出再开正常。
 
 ## 1.0.30（71）中的改动：策略组 Emoji 识别重做（issue #47，2026-10-19）
 
