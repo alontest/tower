@@ -6,7 +6,9 @@
 - 内置 ACL4SSR 落后上游一个提交（10-17 GFWList 自动更新），按发布流程更新到 `575637d`：产物单独提交为 `a79cc42` 并推送，清单绑定后 `--verify-published` 回读 207 个全部一致；`update_acl4ssr_rules.py` 的 `ACL4SSR_REVISION` 同步更新，更新器 23 项测试通过。
 - 正式 Xcode 27.0（27A266a）；发布前 iOS 全量 TowerTests 1,364 项零失败，本地化 1,186/1,186、发布脚本测试通过。
 - 发布源码 `f43109b` 已推送，rebase 后对该提交再跑全量 TowerTests 1,364 项零失败。本机 M4 归档 iOS / Mac Catalyst 均成功，核对 `com.jzb.tower` 1.0.30（70），Mac 为 arm64 / x86_64。本机没有 Distribution 证书，导出改用 asc 已配置的 API Key 云签名（同 1.0.28 / 1.0.29）；本机私有配置未填团队，按文档从匹配的描述文件取唯一团队，只放在进程变量里。
-- asc 上传两端并写入中文测试说明，Apple 处理均为 VALID。内部组自动接收新构建（手动添加会被拒绝），外部组「测试」由 asc 添加并提交 Beta 审核：iOS 立即 APPROVED、IN_BETA_TESTING；Mac 为 WAITING_FOR_BETA_REVIEW。未提交 App Store 正式审核，未发布 GitHub Release / DMG / Homebrew。私有归档与回执在 `~/Builds/Tower-1.0.30-70/`。
+- asc 上传两端并写入中文测试说明，Apple 处理均为 VALID。内部组自动接收新构建（手动添加会被拒绝），外部组「测试」由 asc 添加并提交 Beta 审核：iOS 立即 APPROVED、IN_BETA_TESTING；Mac 为 WAITING_FOR_BETA_REVIEW。未提交 App Store 正式审核。私有归档与回执在 `~/Builds/Tower-1.0.30-70/`。
+- Mac 直接分发：API Key 没有 Developer ID 云签名权限、Xcode 起初未登录账号，用户登录后用同一 Mac 归档 `developer-id` 导出并公证，第二次取回即成功。Developer ID 签名、公证票据、Hardened Runtime、严格签名、Gatekeeper、双架构和 DMG 挂载复核通过。GitHub [v1.0.30](https://github.com/pengchujin/tower/releases/tag/v1.0.30)（tag 指向 `f43109b`）已公开并设为 Latest，公开回下载 SHA-256 与本机一致：`1ac84eaa2385f07b3fd76a5f2f65b8e3b82d3867250d74c635f7392d61db1dee`。
+- README 下载入口已改为 1.0.30（`dad57da`）；Homebrew cask 更新为 1.0.30,70（tap `b3994ae`），brew style / audit 通过，本机 `brew upgrade --cask` 后安装版本 1.0.30（70），严格签名、Gatekeeper、公证票据通过；从 LaunchServices 启动主界面正常显示订阅数据，退出后再次打开同样正常。
 
 ## 未发布：策略组图标与 Emoji 自动补全（2026-10-19）
 
