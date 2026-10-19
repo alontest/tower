@@ -5,6 +5,8 @@
 - 用户要求用 asc 推送新的 TestFlight，只递增 Build 号（1.0.30 尚未提交 App Store 审核，69 已在两端外部测试），并推送 GitHub。纳入下方 10-15 起「未发布」各节：策略组图标与 Emoji 自动补全、首页展开跳动、规则集扩展到全部客户端、state.json 防覆盖与未知值兜底。更新日志见 [1.0.30](releases/1.0.30.md)。
 - 内置 ACL4SSR 落后上游一个提交（10-17 GFWList 自动更新），按发布流程更新到 `575637d`：产物单独提交为 `a79cc42` 并推送，清单绑定后 `--verify-published` 回读 207 个全部一致；`update_acl4ssr_rules.py` 的 `ACL4SSR_REVISION` 同步更新，更新器 23 项测试通过。
 - 正式 Xcode 27.0（27A266a）；发布前 iOS 全量 TowerTests 1,364 项零失败，本地化 1,186/1,186、发布脚本测试通过。
+- 发布源码 `f43109b` 已推送，rebase 后对该提交再跑全量 TowerTests 1,364 项零失败。本机 M4 归档 iOS / Mac Catalyst 均成功，核对 `com.jzb.tower` 1.0.30（70），Mac 为 arm64 / x86_64。本机没有 Distribution 证书，导出改用 asc 已配置的 API Key 云签名（同 1.0.28 / 1.0.29）；本机私有配置未填团队，按文档从匹配的描述文件取唯一团队，只放在进程变量里。
+- asc 上传两端并写入中文测试说明，Apple 处理均为 VALID。内部组自动接收新构建（手动添加会被拒绝），外部组「测试」由 asc 添加并提交 Beta 审核：iOS 立即 APPROVED、IN_BETA_TESTING；Mac 为 WAITING_FOR_BETA_REVIEW。未提交 App Store 正式审核，未发布 GitHub Release / DMG / Homebrew。私有归档与回执在 `~/Builds/Tower-1.0.30-70/`。
 
 ## 未发布：策略组图标与 Emoji 自动补全（2026-10-19）
 
