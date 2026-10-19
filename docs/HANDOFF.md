@@ -1,5 +1,33 @@
 # 当前交接
 
+## 1.0.30（70）TestFlight（2026-10-19）
+
+- 用户要求用 asc 推送新的 TestFlight，只递增 Build 号（1.0.30 尚未提交 App Store 审核，69 已在两端外部测试），并推送 GitHub。纳入下方 10-15 起「未发布」各节：策略组图标与 Emoji 自动补全、首页展开跳动、规则集扩展到全部客户端、state.json 防覆盖与未知值兜底。更新日志见 [1.0.30](releases/1.0.30.md)。
+- 内置 ACL4SSR 落后上游一个提交（10-17 GFWList 自动更新），按发布流程更新到 `575637d`：产物单独提交为 `a79cc42` 并推送，清单绑定后 `--verify-published` 回读 207 个全部一致；`update_acl4ssr_rules.py` 的 `ACL4SSR_REVISION` 同步更新，更新器 23 项测试通过。
+- 正式 Xcode 27.0（27A266a）；发布前 iOS 全量 TowerTests 1,364 项零失败，本地化 1,186/1,186、发布脚本测试通过。
+
+## 未发布：策略组图标与 Emoji 自动补全（2026-10-19）
+
+- **起因**：Surge iOS 在没有图标字段时把组名开头的 Emoji 放大当卡片图标，又糊又和名字重复；导入的第三方方案常没有 Emoji；在线规则库条目的 Emoji 有乱匹配（AkamaiCloud、HuaweiCloud → 🍎，IPTVMainland → 🏠）。
+- **调研**：Surge（`icon-url`，文档写 Mac 6.5+，iOS 5.17.1 程序里也能解析）、Stash（`icon`，JPG/PNG）、mihomo（`icon`，Clash Verge Rev 源码确认会显示，其余前端未确认）、QuanX / Loon（`img-url`）、Egern（`icon`，也支持 SF Symbols）支持图标；Shadowrocket、sing-box、Hiddify、Karing、V2Box 没有。三种风格做了对比图（Surge 卡片、Stash/Clash Verge 浅深色列表、QuanX 行），用户选 Fluent Emoji 3D（透明底）。
+- **识别器**：新增 `PolicyGroupEmoji`，名字自带 → 按词识别服务（英文按单词、驼峰拆分并允许相邻词拼接，中文整词，不看 URL，具体在前）→ 地区（复用 `NodeRegionResolver.nameRegion`）→ 类型兜底。界面显示（`RulePolicyPresentation.emoji`）改用它。在线规则库条目的 Emoji 决定了已保存组名（`🤖 OpenAI`），保留原取值表，只把匹配方式改成按词、不看 URL。
+- **自动补全 Emoji**：`ruleGroupEmojiAutofill`（快照可选字段）。新导入的方案默认开启，已导入的默认关闭；规则定制页右上角菜单「自动补全 Emoji / 不再自动补全 Emoji」，只对导入方案、且 Emoji 显示时出现。名字认不出就不补。顺带修了 `withGroupEmojis` 改名时丢 `origin`（会让「隐藏 Emoji」时本地规则集不再合成内联规则集）和丢 `isCustomNodeFilter`。
+- **导出图标**：`RuleScheme.withPolicyGroupIcons` 在生成时给每个组算出 Emoji → Fluent 3D 图片（jsDelivr 固定提交）或圆形国旗地址，存在 `tower-icon` 参数，由各格式输出。能画图标的客户端（Surge、Surge Mac、Stash、Clash Verge、QuanX、Loon、Egern）名字去掉 Emoji、所有引用一起改；只写字段的 mihomo 其余前端和名为 Clash 的 App 保留 Emoji。条件组、中继组不写图标（Egern 文档里没有）。拿不到图片的组保留名字里的 Emoji。
+- **数据**：`Scripts/update_policy_group_icons.py` 生成 `Tower/Resources/PolicyGroupIcons/PolicyGroupIcons_manifest.json`（1,593 个 Emoji 的图片路径，116 KB，不含图片）和 `Rulesets/PolicyGroupIcons/<flag-icons 提交>/` 187 面圆形国旗 PNG（3 MB）。国旗已单独提交为 `425b0a7` 并推送 `origin/main`（只含 `Rulesets/PolicyGroupIcons/`，经用户同意），清单已用该提交重新生成，`--verify-published` 经 jsDelivr 回读 187 面全部一致。随后真机发现 Stash 等展开组时候选只显示名字，去掉国旗后看不出地区，按用户意见改为：地区组名字始终保留国旗 Emoji、不写国旗图标（国旗 PNG 留着备用，当前导出不引用）。
+- **真机**：Loon 能加载 Fluent 图标；QuanX 对 jsDelivr 和 raw.githubusercontent.com 的 256px Fluent 原图都画不出来（也可能只是没重启 QuanX，用户在测），SF Symbols 能显示但用户觉得丑；调研社区图标包（Qure、Orz-3 mini、Semporia 等都没有许可证、多为品牌 Logo，不能用）后用户选定「Fluent 3D + 浅色圆底」：脚本按 `PolicyGroupIconSupport.symbols` 的 48 个 Emoji 渲染 144px 圆底图到 `Rulesets/PolicyGroupIcons/FluentCircle/`，底色取 Emoji 自身色相的浅色；经用户同意单独提交为 `73074af` 并推送 `origin/main`（只含 `Rulesets/PolicyGroupIcons/FluentCircle/`），清单用 `--circle-commit` 绑定，`--verify-published` 回读 187 面国旗和 48 个圆底图标全部一致；QuanX 现在写这些图片的 raw.githubusercontent.com 地址，用户 2026-10-19 真机确认显示正常（导入后需重启 QuanX 才加载图标）。本地 main 尚未包含 `73074af`，推送 App 代码前要先 rebase 到 `origin/main`；Surge 用户觉得 3D Emoji 在彩色卡片上不好看，对比了 Fluent Emoji 单色、Fluent System Icons、Phosphor、Tabler 四种白色图标后，用户 2026-10-19 决定保留 Fluent 3D。
+- **地区组图标**：QuanX 真机上地区组只有 Σ 默认图标，用户觉得空，改为名字保留国旗、同时写圆形国旗图标（Stash、Clash Verge、Loon、Egern 用 256px 国旗，QuanX 用 `FluentCircle/` 里新增的 187 张 144px 国旗，文件名同样按 Emoji 码点）；Surge 会把名字里的国旗画在图标位，用户确认不写。144px 国旗经用户同意单独提交为 `01f7dbf` 并推送 `origin/main`（只含 `FluentCircle/` 新增国旗和 NOTICE），清单用 `--circle-commit 01f7dbf…` 重新绑定，`--verify-published` 回读 187 面 256px 国旗和 235 个圆底图标全部一致。之后真机发现导入方案里 48 个之外的 Emoji（如 🚫 国内广告）在 QuanX 没有图标，用户选择补齐：脚本改为给全部 1,593 个 Fluent Emoji 出圆底图（约 16 MB），经用户同意新增的 1,545 张单独提交为 `b1cfedc` 并推送，清单用 `--circle-commit b1cfedc…` 重新绑定，用户 2026-10-19 真机确认 QuanX 里 🚫 国内广告和美国组（🇺🇲）图标都正常。ACL4SSR 把美国写成 🇺🇲（UM），没有对应国旗图，取图标时按 `flagAliases` 当作 🇺🇸。本地 main 尚未包含 `73074af`、`01f7dbf`、`b1cfedc`，推送 App 代码前先 rebase 到 `origin/main`。Surge 手册的策略组参数（`no-alert`、`hidden`、`icon-url`、`category`、`underlying-proxy`）里没有颜色/底色字段，卡片颜色由 Surge 决定，配置无法指定。
+- **测试**：`PolicyGroupIconTests`（识别、错配回归、每个表内 Emoji 都有图片、自动补全改名与引用、各客户端图标字段与改名、拿不到图片时保留 Emoji）；旧测试里写死带 Emoji 组名的断言改用 `exportedGroupName(_:for:)`；更新脚本 5 项 Python 测试；mihomo 1.19.31 `-t` 通过。
+- 未递增版本、未提交；真机验证项见 TODO。
+
+## 未发布：首页展开订阅节点时卡片跳动（2026-10-19）
+
+- **现象**：用户反馈首页展开订阅的节点列表会跳动，有些节点会闪烁。
+- **跳动的原因**：「机场公告」是展开列表 `LazyVStack` 的第一行，高度要等布局后才知道，页面 ScrollView 为它修正内容偏移，整张卡片下移约 8–9 pt；第二次展开（国家已缓存、不再查询）照样跳。与 2026-10-15 地图国家列表的问题同一原因。性能夹具的订阅没有公告、节点名都带国家，所以以前测不出来。
+- **修复**：公告移出惰性栈，外层普通 `VStack`，节点行仍在 `LazyVStack` 里懒加载。
+- **测试数据**：Debug 夹具新增 `TOWER_FIXTURE_ANNOUNCEMENT=1`（与 `TOWER_PERFORMANCE_NODE_COUNT` 合用）：第一个订阅带两条公告，节点名不含国家，服务器仍为文档保留地址，不联网。
+- **测试**：新增交互测试 `testSubscriptionCardStaysStillWhileItsNodesExpandAndCollapse`（展开、收起、再展开三次比对卡片位置；改前 161 → 170 pt 失败，改后通过）；地图的两项卡片位置交互测试通过。
+- **闪烁未复现**：本机模拟器的 DNS 经代理返回 198.18.x 假地址，域名节点查不出国家，图标始终是协议图标。真机上名字不含国家的域名节点，首次展开时先显示协议图标、DNS 返回后换成国旗，是最可能的「闪烁」，待用户确认现象。
+
 ## 未发布：「优先使用规则集」扩展到全部能引用规则集的客户端（2026-10-18）
 
 - **起因**：用户要求调研哪些客户端支持规则集，并「对能支持规则集的都做支持」。改前只有 Surge、mihomo 系、Stash、Shadowrocket、Karing、sing-box MT 引用内置规则集；Loon、QuanX、Hiddify、Egern 全部内联。
