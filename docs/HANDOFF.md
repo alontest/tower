@@ -1,6 +1,11 @@
 # 当前交接
 
-## 未发布：策略组 Emoji 识别重做（issue #47，2026-10-19）
+## 1.0.30（71）TestFlight 与 Mac 分发（2026-10-20）
+
+- 用户要求推送 TestFlight、只递增 Build 号，并更新 GitHub 版本；纳入下方 issue #47 的策略组 Emoji 识别重做。GitHub 上同一版本号此前没有发过两次，经用户选择新建 Release `v1.0.30-71`，v1.0.30（70）原样保留；Homebrew cask 的下载 tag 改为「版本-构建号」。
+- 发布前检查：本地化、发布脚本测试通过，内置 ACL4SSR 仍是上游最新，207 个规则产物和 187 面国旗、1,780 个 QuanX 圆底图标回读一致；完整 TowerTests 已在同一代码 `58b4341` 上 1,367 项零失败。
+
+## 1.0.30（71）中的改动：策略组 Emoji 识别重做（issue #47，2026-10-19）
 
 - **起因**：Windows 版 Clash Verge 上「影视节点」「印亚马逊」显示 🧩。根本问题是识别只靠一张约 40 类的手写关键词表，表外的叫法一律按类型兜底（手动选择组是 🧩）。
 - **语料**：用 GitHub 代码搜索收集 8,362 份公开配置（subconverter、Clash / mihomo、Surge、QuanX、Loon），共 165,080 个策略组、12,895 个不同组名；至少出现在两份配置里的 5,488 个组名作为评估集。脚本 `Scripts/policy_group_corpus.py`（search / download / parse / report），评估测试 `PolicyGroupEmojiCorpusEvaluation` 默认跳过；下载的文件只在工作目录里，不进仓库、不打包。
