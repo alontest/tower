@@ -765,20 +765,26 @@ private struct SubscriptionCard: View {
                 // Lazy, not a plain VStack: a large airport expands to several
                 // hundred rows, and building them all to show ten is what made
                 // expanding a big subscription stutter.
-                LazyVStack(spacing: 0) {
+                // The announcement sits outside the lazy stack: as its first
+                // row, of a height the stack only learns once laid out, the
+                // page's scroll view corrected for it and the card jumped
+                // (the same cause as the map's region list, 2026-10-15).
+                VStack(spacing: 0) {
                     SubscriptionAnnouncementSection(notices: source.usage?.distinctNotices ?? [])
 
-                    // Built only while expanded. Asking for it unconditionally
-                    // copied every node of every subscription on every redraw.
-                    let nodes = model.nodes(for: source)
-                    ForEach(nodes) { node in
-                        CompactNodeRow(node: node)
-                            .overlay(alignment: .bottom) {
-                                if node.id != nodes.last?.id {
-                                    Divider()
-                                        .padding(.leading, 42)
+                    LazyVStack(spacing: 0) {
+                        // Built only while expanded. Asking for it unconditionally
+                        // copied every node of every subscription on every redraw.
+                        let nodes = model.nodes(for: source)
+                        ForEach(nodes) { node in
+                            CompactNodeRow(node: node)
+                                .overlay(alignment: .bottom) {
+                                    if node.id != nodes.last?.id {
+                                        Divider()
+                                            .padding(.leading, 42)
+                                    }
                                 }
-                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
